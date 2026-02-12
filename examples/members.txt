@@ -1,0 +1,7 @@
+elenco membri con tag [LSE-P]
+1 | [LSE-P] Mario Rossi (123456789) | 01/01/2024
+2 | [LSE-P] Giovanni Verdi (987654321) | 02/01/2024
+3 | [LSE-P] Luca Bianchi (456789123) | 03/01/2024
+4 | [LSE-P] Paolo Neri (789123456) | 04/01/2024
+5 | [LSE-P] Marco Blu (321654987) | 05/01/2024
+fine elenco

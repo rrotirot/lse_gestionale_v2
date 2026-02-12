@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+@theme {
+  /* Palette colori personalizzata */
+  --color-denim: hsl(228 88% 49%);
+  --color-heliotrope: hsl(270 100% 64%);
+  --color-malachite: hsl(144 99% 39%);
+  --color-mirage: hsl(214 33% 16%);
+  --color-mirage-dark: hsl(214 33% 13%);
+  --color-dodger-blue: hsl(217 100% 59%);
+  --color-rock-blue: hsl(208 33% 68%);
+
+  /* Tema unico - Usando la palette personalizzata (sempre dark mode) */
+  --color-background: hsl(214 33% 13%);
+  --color-foreground: hsl(208 33% 90%);
+  --color-card: hsl(214 33% 16%);
+  --color-card-foreground: hsl(208 33% 90%);
+  --color-popover: hsl(214 33% 16%);
+  --color-popover-foreground: hsl(208 33% 90%);
+  --color-primary: hsl(217 100% 59%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(214 33% 25%);
+  --color-secondary-foreground: hsl(208 33% 90%);
+  --color-muted: hsl(214 33% 20%);
+  --color-muted-foreground: hsl(208 33% 75%);
+  --color-accent: hsl(270 100% 64%);
+  --color-accent-foreground: hsl(0 0% 100%);
+  --color-destructive: hsl(0 72% 51%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-border: hsl(214 33% 30%);
+  --color-input: hsl(214 33% 25%);
+  --color-ring: hsl(217 100% 59%);
+  --radius: 0.5rem;
+}
+
+/* Miglioramenti contrasto per classi Tailwind comuni in dark mode */
+.dark .text-gray-400 {
+  color: hsl(208 33% 70%) !important;
+}
+
+.dark .text-gray-500 {
+  color: hsl(208 33% 65%) !important;
+}
+
+.dark .text-gray-300 {
+  color: hsl(208 33% 85%) !important;
+}
+
+.dark .placeholder-gray-500 {
+  color: hsl(208 33% 60%) !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: hsl(208 33% 60%) !important;
+  opacity: 1;
+}
+
+/* Miglioramento contrasto bordi in dark mode */
+.dark .border-gray-600 {
+  border-color: hsl(214 33% 35%) !important;
+}
+
+.dark .border-gray-700 {
+  border-color: hsl(214 33% 30%) !important;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Custom Scrollbar per tutti i browser compatibili */
+/* Webkit browsers (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px; /* Per scrollbar orizzontale se presente */
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #3b82f6, #6366f1, #8b5cf6); /* Blu/indigo/purple per light mode */
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to bottom, #2563eb, #4f46e5, #7c3aed); /* Più scuro al hover */
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Modalità scura */
+.dark ::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, hsl(217 100% 59%), hsl(214 33% 35%), hsl(214 33% 25%)); /* Dodger-blue, mirage chiaro, secondary */
+  background-clip: content-box;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to bottom, hsl(217 100% 70%), hsl(214 33% 45%), hsl(214 33% 35%)); /* Più chiaro al hover */
+  background-clip: content-box;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3b82f6 transparent; /* Thumb blu, track trasparente per light */
+}
+
+/* Modalità scura per Firefox */
+.dark * {
+  scrollbar-color: hsl(217 100% 59%) transparent; /* Dodger-blue */
+}
+
+/* Responsive: scrollbar più sottile su mobile */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+}

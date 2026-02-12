@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - MONGODB_URI=mongodb+srv://roccorotiroti_db_user:XQRC9TrDwZ4GApd3wx83@cluster0.lmzr2w8.mongodb.net/?appName=Cluster0
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=change_me_in_prod
+    depends_on:
+      - redis
+    volumes:
+      - ./:/usr/src/app
+      - /usr/src/app/node_modules
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  mongo_data:
+  redis_data:
+
+networks:
+  default:
+    driver: bridge

@@ -1,0 +1,3580 @@
+/**
+ * Backend Node.js per integrare l'API RSI di Star Citizen
+ * Funziona come proxy per aggirare le restrizioni CORS
+ * Include integrazione MongoDB per salvare i membri
+ */
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
+const cheerio = require('cheerio');
+const mongoose = require('mongoose');
+const Member = require('./models/Member');
+const DeletedMember = require('./models/DeletedMember');
+const PromotedMember = require('./models/PromotedMember');
+const User = require('./models/User');
+const Event = require('./models/Event');
+
+// Import routes
+const authRoutes = require('./routes/auth');
+const memberRoutes = require('./routes/members');
+const jwt = require('jsonwebtoken');
+const { logger, requestLogger } = require('./lib/logger');
+const cache = require('./lib/cache');
+const { setupApiVersioning, legacyRedirectMiddleware } = require('./lib/versioning');
+const { validateRequiredEnv, setupFetch, setupMongoDB } = require('./lib/config');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpecs = require('./lib/swagger');
+
+// ==================== CONFIGURAZIONE ====================
+// Validazione variabili critiche
+validateRequiredEnv(['MONGODB_URI', 'JWT_SECRET']);
+
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? null : 'your-secret-key-change-this');
+const API_KEY = process.env.API_KEY || process.env.DISCORD_BOT_API_KEY; // Token API per bot Discord
+
+// Setup fetch nativo
+const fetch = setupFetch();
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+// Setup MongoDB con gestione migliorata
+setupMongoDB();
+
+// Gestione eventi di connessione
+mongoose.connection.on('disconnected', () => {
+    console.warn('⚠️  MongoDB disconnesso');
+});
+
+mongoose.connection.on('reconnected', () => {
+    console.log('✅ MongoDB riconnesso');
+});
+
+mongoose.connection.on('error', (error) => {
+    console.error('❌ Errore MongoDB:', error.message);
+});
+
+// Variabile per tracciare lo stato della connessione
+let isMongoConnected = false;
+
+mongoose.connection.on('connected', () => {
+    isMongoConnected = true;
+    console.log('✅ MongoDB connesso e pronto');
+});
+
+mongoose.connection.on('disconnected', () => {
+    isMongoConnected = false;
+    console.warn('⚠️  MongoDB disconnesso');
+});
+
+// Middleware per verificare la connessione MongoDB prima di eseguire operazioni sul database
+const checkMongoConnection = (req, res, next) => {
+    // readyState: 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
+    const readyState = mongoose.connection.readyState;
+    
+    if (readyState === 1) {
+        // Connesso e pronto
+        return next();
+    }
+    
+    if (readyState === 2) {
+        // Connessione in corso, aspetta un po' e riprova
+        return res.status(503).json({
+            success: false,
+            error: 'Database in connessione. Attendere qualche secondo e riprovare.',
+            details: 'La connessione a MongoDB è in corso. Riprova tra qualche secondo.'
+        });
+    }
+    
+    // Disconnesso (0) o in disconnessione (3)
+    // Prova a riconnettere se non è già in corso
+    if (readyState === 0) {
+        console.log('🔄 Tentativo di riconnessione a MongoDB...');
+        mongoose.connect(MONGODB_URI, mongooseOptions).catch(err => {
+            console.error('❌ Errore riconnessione:', err.message);
+        });
+    }
+    
+    return res.status(503).json({
+        success: false,
+        error: 'Database non disponibile. La connessione a MongoDB non è ancora stata stabilita.',
+        details: 'Verificare che MongoDB sia in esecuzione e che la connection string nel file .env sia corretta.',
+        connectionState: readyState === 0 ? 'disconnected' : readyState === 3 ? 'disconnecting' : 'unknown'
+    });
+};
+
+// ==================== MIDDLEWARE DI SICUREZZA ====================
+
+// Helmet: aggiunge header di sicurezza HTTP
+app.use(helmet());
+
+// CORS configurato (per produzione limitare gli origin)
+const corsOptions = {
+    origin: process.env.CORS_ORIGIN || (process.env.NODE_ENV === 'production' ? false : '*'), // In produzione, impostare a URL specifico o false per bloccare
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+};
+app.use(cors(corsOptions));
+
+// Forza HTTPS in produzione
+if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+        if (req.header('x-forwarded-proto') !== 'https') {
+            res.redirect(`https://${req.header('host')}${req.url}`);
+        } else {
+            next();
+        }
+    });
+}
+
+// Rate limiting globale (protezione generale)
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minuti
+    max: 100000, // max 100 richieste per IP
+    message: 'Troppi tentativi, riprova più tardi',
+    standardHeaders: true,
+    legacyHeaders: false
+});
+app.use(globalLimiter);
+
+// Rate limiting per login (più restrittivo)
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minuti
+    max: 5, // max 5 tentativi per IP
+    message: 'Troppi tentativi di login, riprova più tardi',
+    skipSuccessfulRequests: true, // Non contare i login riusciti
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+// Rate limiting per registrazione
+const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 ora
+    max: 5, // max 5 registrazioni per IP
+    message: 'Troppi tentativi di registrazione, riprova più tardi',
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+// Rate limiting per operazioni sensibili (DELETE, ecc.)
+const strictLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 ora
+    max: 10, // max 10 operazioni per IP
+    message: 'Troppo operazioni in poco tempo, riprova più tardi',
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+app.use(express.json());
+
+// ==================== API VERSIONING ====================
+// Configura versioning per tutti gli endpoint /api/*
+setupApiVersioning(app);
+
+// // ==================== SWAGGER/OpenAPI ====================
+// // Documentazione interattiva disponibile su GET /api/docs
+// app.use('/api/v1/docs', swaggerUi.serve);
+// app.get('/api/v1/docs', swaggerUi.setup(swaggerSpecs, {
+//     swaggerOptions: {
+//         url: '/api/v1/docs/swagger.json',
+//         persistAuthorization: true,
+//     },
+// }));
+// app.get('/api/v1/docs/swagger.json', (req, res) => {
+//     res.setHeader('Content-Type', 'application/json');
+//     res.send(swaggerSpecs);
+// });
+
+// Middleware di logging delle richieste HTTP (Winston)
+app.use(requestLogger);
+
+// Middleware di debug per tracciare tutte le richieste (solo in development)
+if (process.env.NODE_ENV === 'development') {
+    app.use((req, res, next) => {
+        if (req.path.includes('deleted-members')) {
+            logger.debug(`Richiesta dettagliata`, {
+                method: req.method,
+                path: req.path,
+                params: req.params,
+                query: req.query,
+                hasAuth: !!req.headers.authorization
+            });
+        }
+        next();
+    });
+}
+
+// Route di default
+// Middleware per verificare il token JWT
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+    // Log per debug delle richieste di autenticazione
+    if (process.env.NODE_ENV === 'development' && req.path.includes('verification-code')) {
+        console.log('🔐 Richiesta autenticazione per:', req.path);
+        console.log('📋 Header Authorization presente:', !!authHeader);
+        console.log('🎫 Token presente:', !!token);
+    }
+
+    if (!token) {
+        if (process.env.NODE_ENV === 'development' && req.path.includes('verification-code')) {
+            console.error('❌ Token mancante per', req.path);
+        }
+        return res.status(401).json({
+            success: false,
+            error: 'Token di autenticazione mancante'
+        });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            if (process.env.NODE_ENV === 'development' && req.path.includes('verification-code')) {
+                console.error('❌ Errore verifica token:', err.message);
+            }
+            return res.status(403).json({
+                success: false,
+                error: 'Token non valido o scaduto'
+            });
+        }
+        req.user = user;
+        // Log per debug (solo in development)
+        if (process.env.NODE_ENV === 'development') {
+            if (req.path.includes('members') && req.method === 'DELETE') {
+                console.log(`🔐 Token verificato per utente:`, {
+                    username: user.username,
+                    userId: user.userId
+                });
+            }
+            if (req.path.includes('verification-code')) {
+                console.log(`✅ Token verificato per utente:`, {
+                    username: user.username,
+                    userId: user.userId
+                });
+            }
+        }
+        next();
+    });
+};
+
+// Middleware per autenticazione API (per bot Discord)
+// Supporta sia API Key che Bearer Token
+const authenticateAPI = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const apiKeyHeader = req.headers['x-api-key'];
+    
+    // Prova prima con Bearer token (JWT per utenti web)
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.split(' ')[1];
+        jwt.verify(token, JWT_SECRET, (err, user) => {
+            if (!err) {
+                req.user = user;
+                req.authType = 'jwt';
+                return next();
+            }
+        });
+    }
+    
+    // Prova con API Key
+    const apiKey = apiKeyHeader || (authHeader && authHeader.startsWith('ApiKey ') ? authHeader.split(' ')[1] : null);
+    
+    if (apiKey && apiKey === API_KEY) {
+        req.authType = 'api-key';
+        req.bot = true; // Indica che la richiesta proviene dal bot
+        return next();
+    }
+    
+    // Se nessun metodo di autenticazione è valido
+    return res.status(401).json({
+        success: false,
+        error: 'Autenticazione richiesta. Fornisci un token JWT valido o una API Key valida.',
+        hint: 'Usa Header: Authorization: Bearer <token> oppure X-API-Key: <api-key>'
+    });
+};
+
+app.get('/', (req, res) => {
+    res.json({
+        message: 'RSI API Proxy Server',
+        endpoints: {
+            health: '/api/v1/health',
+            auth: {
+                register: 'POST /api/v1/auth/register',
+                login: 'POST /api/v1/auth/login',
+                verify: 'GET /api/v1/auth/verify'
+            },
+            orgs: '/api/v1/rsi/orgs/:handle',
+            members: {
+                save: 'POST /api/v1/members',
+                getAll: 'GET /api/v1/members',
+                update: 'PUT /api/v1/members/:key',
+                delete: 'DELETE /api/v1/members/:key',
+                resetValidation: 'PUT /api/v1/members/:key/reset-validation',
+                resetValidationAll: 'PUT /api/v1/members/reset-validation/all'
+            },
+            promotedMembers: {
+                getAll: 'GET /api/v1/promoted-members',
+                getByKey: 'GET /api/v1/promoted-members/:key',
+                update: 'PUT /api/v1/promoted-members/:key',
+                delete: 'DELETE /api/v1/promoted-members/:key'
+            }
+        }
+    });
+});
+
+// Endpoint per registrazione (con validazione e rate limiting)
+app.post('/api/v1/auth/register', 
+    registerLimiter,
+    checkMongoConnection,
+    // Validazione input
+    body('username')
+        .trim()
+        .isLength({ min: 3, max: 30 })
+        .withMessage('Username deve essere tra 3 e 30 caratteri')
+        .matches(/^[a-zA-Z0-9_-]+$/)
+        .withMessage('Username può contenere solo lettere, numeri, trattini e underscore'),
+    body('password')
+        .isLength({ min: 6 })
+        .withMessage('Password deve essere almeno 6 caratteri')
+        .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+        .withMessage('Password deve contenere lettere maiuscole, minuscole e numeri'),
+    async (req, res) => {
+        try {
+            // Controlla errori di validazione
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Validazione fallita',
+                    details: errors.array().map(e => ({ field: e.param, message: e.msg }))
+                });
+            }
+
+            const { username, password } = req.body;
+
+            // Verifica se l'utente esiste già
+            const existingUser = await User.findOne({ username: username.toLowerCase().trim() });
+            if (existingUser) {
+                return res.status(409).json({
+                    success: false,
+                    error: 'Username già esistente'
+                });
+            }
+
+            // Crea nuovo utente
+            const user = new User({
+                username: username.toLowerCase().trim(),
+                password: password
+            });
+
+            await user.save();
+
+            console.log(`✅ Nuovo utente registrato: ${user.username}`);
+
+            return res.json({
+                success: true,
+                message: 'Registrazione completata con successo',
+                user: {
+                    id: user._id,
+                    username: user.username,
+                    rsiHandle: user.rsiHandle,
+                    rsiVerified: user.rsiVerified,
+                    rsiAvatar: user.rsiAvatar,
+                    organizationRank: user.organizationRank,
+                    verificationCodeFound: user.verificationCodeFound,
+                    verificationRankVerified: user.verificationRankVerified,
+                    verificationMainOrgVerified: user.verificationMainOrgVerified,
+                    mainOrgName: user.mainOrgName
+                }
+            });
+        } catch (error) {
+            console.error('Errore nella registrazione:', error);
+            return res.status(500).json({
+                success: false,
+                error: error.message || 'Errore interno del server'
+            });
+        }
+    }
+);
+
+// Endpoint per login (con validazione e rate limiting)
+app.post('/api/v1/auth/login', 
+    loginLimiter,
+    checkMongoConnection,
+    // Validazione input
+    body('username')
+        .trim()
+        .notEmpty()
+        .withMessage('Username è richiesto'),
+    body('password')
+        .notEmpty()
+        .withMessage('Password è richiesta'),
+    async (req, res) => {
+        try {
+            // Controlla errori di validazione
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Validazione fallita',
+                    details: errors.array().map(e => ({ field: e.param, message: e.msg }))
+                });
+            }
+
+            const { username, password } = req.body;
+
+            // Trova l'utente
+            const user = await User.findOne({ username: username.toLowerCase().trim() });
+            if (!user) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Credenziali non valide'
+                });
+            }
+
+            // Verifica la password
+            const isPasswordValid = await user.comparePassword(password);
+            if (!isPasswordValid) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Credenziali non valide'
+                });
+            }
+
+            // Genera token JWT
+            const token = jwt.sign(
+                { userId: user._id, username: user.username },
+                JWT_SECRET,
+                { expiresIn: '24h' }
+            );
+
+            console.log(`✅ Login effettuato: ${user.username}`);
+
+            return res.json({
+                success: true,
+                message: 'Login effettuato con successo',
+                token: token,
+                user: {
+                    id: user._id,
+                    username: user.username,
+                    rsiHandle: user.rsiHandle,
+                    rsiVerified: user.rsiVerified,
+                    rsiAvatar: user.rsiAvatar,
+                    organizationRank: user.organizationRank,
+                    verificationCodeFound: user.verificationCodeFound,
+                    verificationRankVerified: user.verificationRankVerified,
+                    verificationMainOrgVerified: user.verificationMainOrgVerified,
+                    mainOrgName: user.mainOrgName
+                }
+            });
+        } catch (error) {
+            console.error('Errore nel login:', error);
+            return res.status(500).json({
+                success: false,
+                error: error.message || 'Errore interno del server'
+            });
+        }
+    }
+);
+
+// Endpoint per verificare il token
+app.get('/api/v1/auth/verify', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Utente non trovato'
+            });
+        }
+
+    return res.json({
+        success: true,
+        user: {
+                id: user._id,
+                username: user.username,
+                rsiHandle: user.rsiHandle,
+                rsiVerified: user.rsiVerified,
+                rsiAvatar: user.rsiAvatar,
+                organizationRank: user.organizationRank,
+                verificationCodeFound: user.verificationCodeFound,
+                verificationRankVerified: user.verificationRankVerified,
+                verificationMainOrgVerified: user.verificationMainOrgVerified,
+                mainOrgName: user.mainOrgName
+            }
+        });
+    } catch (error) {
+        console.error('Errore nella verifica token:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per verificare il token (versione v1)
+app.get('/api/v1/auth/verify', authenticateToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Utente non trovato'
+            });
+        }
+
+        return res.json({
+            success: true,
+            user: {
+                id: user._id,
+                username: user.username,
+                rsiHandle: user.rsiHandle,
+                rsiVerified: user.rsiVerified,
+                rsiAvatar: user.rsiAvatar,
+                organizationRank: user.organizationRank,
+                verificationCodeFound: user.verificationCodeFound,
+                verificationRankVerified: user.verificationRankVerified,
+                verificationMainOrgVerified: user.verificationMainOrgVerified,
+                mainOrgName: user.mainOrgName
+            }
+        });
+    } catch (error) {
+        console.error('Errore nella verifica token:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per logout
+app.post('/api/v1/auth/logout', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const username = req.user.username;
+        
+        console.log(`🚪 Logout effettuato da: ${username} (ID: ${userId})`);
+        
+        return res.json({
+            success: true,
+            message: 'Logout effettuato con successo'
+        });
+    } catch (error) {
+        console.error('Errore nel logout:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per cambiare la password
+app.put('/api/v1/auth/change-password', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        const { currentPassword, newPassword } = req.body;
+
+        // Validazione
+        if (!newPassword) {
+            return res.status(400).json({
+                success: false,
+                error: 'La nuova password è richiesta'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                error: 'La nuova password deve essere di almeno 6 caratteri'
+            });
+        }
+
+        // Trova l'utente
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Utente non trovato'
+            });
+        }
+
+        // Se l'utente non è verificato RSI, richiedi la password corrente
+        if (!user.rsiVerified) {
+            if (!currentPassword) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Password corrente richiesta per utenti non verificati'
+                });
+            }
+
+            // Verifica la password corrente
+            const isPasswordValid = await user.comparePassword(currentPassword);
+            if (!isPasswordValid) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Password corrente non corretta'
+                });
+            }
+
+            // Verifica che la nuova password sia diversa dalla corrente
+            const isSamePassword = await user.comparePassword(newPassword);
+            if (isSamePassword) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'La nuova password deve essere diversa dalla password corrente'
+                });
+            }
+        } else {
+            // Per utenti verificati RSI, verifica solo che la nuova password sia diversa dalla corrente
+            const isSamePassword = await user.comparePassword(newPassword);
+            if (isSamePassword) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'La nuova password deve essere diversa dalla password corrente'
+                });
+            }
+        }
+
+        // Aggiorna la password
+        user.password = newPassword;
+        await user.save();
+
+        console.log(`🔐 Password cambiata per utente: ${user.username} (ID: ${userId})${user.rsiVerified ? ' [Utente verificato RSI - password corrente omessa]' : ''}`);
+
+        return res.json({
+            success: true,
+            message: 'Password cambiata con successo'
+        });
+    } catch (error) {
+        console.error('Errore nel cambio password:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per generare un codice di verifica RSI
+app.post('/api/v1/auth/verification-code', authenticateToken, (req, res) => {
+    try {
+        console.log('📥 Richiesta POST /api/auth/verification-code ricevuta');
+        console.log('👤 Utente autenticato:', req.user?.username || req.user?.userId);
+        
+        // Genera un codice alfanumerico randomico di 6 caratteri
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let code = '';
+        for (let i = 0; i < 6; i++) {
+            code += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        const verificationCode = `[LSE:${code}]`;
+
+        console.log('✅ Codice di verifica generato:', verificationCode);
+
+        return res.json({
+            success: true,
+            code: verificationCode
+        });
+    } catch (error) {
+        console.error('❌ Errore nella generazione codice:', error);
+        console.error('Stack:', error.stack);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per verificare il codice RSI nel profilo utente
+app.post('/api/v1/auth/verify-rsi-code', checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        const { handle, code } = req.body;
+        const userId = req.user.userId;
+
+        if (!handle || !code) {
+            return res.status(400).json({
+                success: false,
+                error: 'Handle RSI e codice di verifica sono richiesti'
+            });
+        }
+
+        // Cerca il codice nella pagina del profilo RSI
+        const profileUrl = `https://robertsspaceindustries.com/citizens/${encodeURIComponent(handle)}`;
+
+        const response = await fetch(profileUrl, {
+            method: 'GET',
+            headers: {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            timeout: 10000 // 10 secondi timeout
+        });
+
+        if (!response.ok) {
+            return res.status(response.status).json({
+                success: false,
+                error: `Errore nel recupero profilo RSI: ${response.statusText}`,
+                verified: false
+            });
+        }
+
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        // Cerca il codice nella pagina (bio, descrizione, ecc.)
+        const pageText = $.text();
+        const codeFound = pageText.includes(code);
+
+        // Verifica il rank dell'organizzazione
+        // Cerca il div con class="ranking" e una classe che inizia con "data" (es: "data10", "data5")
+        // e conta gli span con classe "active"
+        let organizationRank = 0;
+        let rankVerified = false;
+        try {
+            // Prova diversi selettori per trovare il ranking
+            // Il div ha class="ranking data10" (o simile), non "ranking data"
+            const selectors = [
+                'div.ranking',  // Cerca prima solo per "ranking" (più generico)
+                '.ranking',
+                '[class*="ranking"]',
+                'div[class*="rank"]',
+                '.org-rank',
+                '[class*="org-rank"]'
+            ];
+
+            let rankingDiv = null;
+            let foundSelector = null;
+
+            for (const selector of selectors) {
+                rankingDiv = $(selector);
+                if (rankingDiv.length > 0) {
+                    foundSelector = selector;
+                    console.log(`🔍 Trovato ranking div con selettore: ${selector}`);
+                    break;
+                }
+            }
+
+            if (rankingDiv && rankingDiv.length > 0) {
+                // Filtra per trovare il div che ha sia "ranking" che una classe che inizia con "data" seguita da un numero
+                // (es: "data4", "data5", "data10", ecc.) - il numero finale cambia in base al rank
+                // NOTA: Il rank viene determinato contando gli span con classe "active", NON dal numero nella classe "data"
+                let targetDiv = null;
+                rankingDiv.each((i, elem) => {
+                    const classes = $(elem).attr('class') || '';
+                    const classArray = classes.split(/\s+/);
+                    const hasRanking = classArray.some(c => c === 'ranking' || c.includes('ranking'));
+                    // Cerca una classe che inizia con "data" seguita da uno o più numeri (es: "data4", "data10", "data5")
+                    const hasData = classArray.some(c => /^data\d+$/.test(c) || c === 'data');
+                    
+                    if (hasRanking && hasData) {
+                        targetDiv = $(elem);
+                        console.log(`🔍 Trovato div ranking con classi: ${classes}`);
+                        return false; // Break the loop
+                    }
+                });
+
+                // Se non trovato con il filtro, usa il primo div ranking
+                if (!targetDiv && rankingDiv.length > 0) {
+                    targetDiv = rankingDiv.first();
+                    console.log(`🔍 Usando il primo div ranking trovato`);
+                }
+
+                if (!targetDiv || targetDiv.length === 0) {
+                    console.log('⚠️ Nessun div ranking valido trovato');
+                } else {
+                    // Prova diversi modi per trovare gli span attivi
+                    const activeSpanSelectors = [
+                        'span.active',
+                        'span[class*="active"]',
+                        'span[class="active"]',
+                        '.active',
+                        '[class*="active"]'
+                    ];
+
+                    let activeSpans = null;
+                    let foundSpanSelector = null;
+
+                    for (const spanSelector of activeSpanSelectors) {
+                        activeSpans = targetDiv.find(spanSelector);
+                        if (activeSpans.length > 0) {
+                            foundSpanSelector = spanSelector;
+                            console.log(`🔍 Trovati ${activeSpans.length} span attivi con selettore: ${spanSelector}`);
+                            break;
+                        }
+                    }
+
+                    // Se non trovato nel div specifico, cerca in tutta la pagina
+                    if (!activeSpans || activeSpans.length === 0) {
+                        console.log('⚠️ Nessuno span attivo trovato nel div ranking, cerco in tutta la pagina...');
+                        for (const spanSelector of activeSpanSelectors) {
+                            activeSpans = $(spanSelector);
+                            if (activeSpans.length > 0) {
+                                foundSpanSelector = spanSelector;
+                                console.log(`🔍 Trovati ${activeSpans.length} span attivi in tutta la pagina con selettore: ${spanSelector}`);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (activeSpans && activeSpans.length > 0) {
+                        organizationRank = activeSpans.length;
+                        rankVerified = organizationRank >= 4;
+                        console.log(`📊 Organization Rank trovato: ${organizationRank} stelle attive (richiesto: >= 4)`);
+                        console.log(`   Selettore div: ${foundSelector || 'N/A'}`);
+                        console.log(`   Selettore span: ${foundSpanSelector || 'N/A'}`);
+                        if (targetDiv) {
+                            console.log(`   Classi del div: ${targetDiv.attr('class') || 'N/A'}`);
+                        }
+                    } else {
+                        console.log('⚠️ Nessuno span attivo trovato con nessun selettore');
+                        // Log dell'HTML del div ranking per debug
+                        if (targetDiv && targetDiv.length > 0) {
+                            const htmlContent = targetDiv.html() || '';
+                            console.log(`   HTML del div ranking (primi 500 caratteri): ${htmlContent.substring(0, 500)}`);
+                            // Conta anche tutti gli span nel div per debug
+                            const allSpans = targetDiv.find('span');
+                            console.log(`   Totale span nel div: ${allSpans.length}`);
+                            allSpans.each((i, span) => {
+                                const spanClasses = $(span).attr('class') || '';
+                                console.log(`     Span ${i + 1}: class="${spanClasses}"`);
+                            });
+                        }
+                    }
+                }
+            } else {
+                console.log('⚠️ Div ranking non trovato con nessun selettore');
+                // Log di debug: cerca qualsiasi elemento che contenga "rank" o "star"
+                const rankElements = $('[class*="rank"], [class*="star"], [id*="rank"], [id*="star"]');
+                console.log(`   Elementi trovati con "rank" o "star": ${rankElements.length}`);
+                if (rankElements.length > 0) {
+                    console.log(`   Primo elemento trovato: ${rankElements.first().attr('class') || rankElements.first().attr('id') || 'N/A'}`);
+                }
+            }
+        } catch (rankError) {
+            console.error('Errore nella verifica del rank organizzazione:', rankError);
+            console.error('Stack trace:', rankError.stack);
+            // Continua anche se la verifica del rank fallisce
+        }
+
+        // Estrai l'immagine del profilo RSI
+        let rsiAvatarUrl = null;
+        try {
+            // Cerca l'immagine del profilo in vari possibili selettori
+            // Pattern comuni per le immagini profilo RSI
+            const avatarSelectors = [
+                'img.avatar',
+                'img[class*="avatar"]',
+                'img[class*="profile"]',
+                'img[class*="citizen"]',
+                '.profile-image img',
+                '.avatar-image img',
+                '.citizen-avatar img',
+                '.profile-picture img',
+                '.user-avatar img',
+                'img[src*="avatar"]',
+                'img[src*="profile"]',
+                'img[src*="citizen"]',
+                'img[src*="portrait"]',
+                '.citizen-portrait img',
+                '.portrait img'
+            ];
+
+            for (const selector of avatarSelectors) {
+                const avatarImg = $(selector).first();
+                if (avatarImg.length) {
+                    let src = avatarImg.attr('src') || avatarImg.attr('data-src') || avatarImg.attr('data-lazy-src');
+                    if (src) {
+                        // Converti URL relativi in assoluti
+                        if (src.startsWith('//')) {
+                            src = 'https:' + src;
+                        } else if (src.startsWith('/')) {
+                            src = 'https://robertsspaceindustries.com' + src;
+                        } else if (!src.startsWith('http')) {
+                            src = 'https://robertsspaceindustries.com/' + src;
+                        }
+                        // Verifica che sia un'immagine valida (non un placeholder)
+                        if (!src.includes('placeholder') && !src.includes('default') && src.match(/\.(jpg|jpeg|png|gif|webp)/i)) {
+                            rsiAvatarUrl = src;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Se non trovato con i selettori, cerca pattern nell'HTML con regex
+            if (!rsiAvatarUrl) {
+                // Cerca immagini che contengono "avatar", "profile", "citizen" o "portrait" nell'URL
+                const avatarMatches = html.matchAll(/<img[^>]*src=["']([^"']*(?:avatar|profile|citizen|portrait)[^"']*\.(?:jpg|jpeg|png|gif|webp))["']/gi);
+                for (const match of avatarMatches) {
+                    if (match[1]) {
+                        let src = match[1];
+                        // Escludi placeholder e immagini default
+                        if (!src.includes('placeholder') && !src.includes('default')) {
+                            if (src.startsWith('//')) {
+                                src = 'https:' + src;
+                            } else if (src.startsWith('/')) {
+                                src = 'https://robertsspaceindustries.com' + src;
+                            } else if (!src.startsWith('http')) {
+                                src = 'https://robertsspaceindustries.com/' + src;
+                            }
+                            rsiAvatarUrl = src;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Se ancora non trovato, cerca qualsiasi immagine nella sezione profilo
+            if (!rsiAvatarUrl) {
+                const profileSection = $('.profile, .citizen-profile, .user-profile, [class*="profile"]').first();
+                if (profileSection.length) {
+                    const profileImg = profileSection.find('img').first();
+                    if (profileImg.length) {
+                        let src = profileImg.attr('src') || profileImg.attr('data-src');
+                        if (src && !src.includes('placeholder') && !src.includes('default')) {
+                            if (src.startsWith('//')) {
+                                src = 'https:' + src;
+                            } else if (src.startsWith('/')) {
+                                src = 'https://robertsspaceindustries.com' + src;
+                            } else if (!src.startsWith('http')) {
+                                src = 'https://robertsspaceindustries.com/' + src;
+                            }
+                            rsiAvatarUrl = src;
+                        }
+                    }
+                }
+            }
+
+            console.log(`🖼️ Avatar RSI trovato: ${rsiAvatarUrl || 'NON TROVATO'}`);
+        } catch (avatarError) {
+            console.error('Errore nell\'estrazione avatar RSI:', avatarError);
+            // Continua anche se l'estrazione dell'avatar fallisce
+        }
+
+        // Verifica che la main org sia "Logistic Space Economy"
+        let mainOrgVerified = false;
+        let mainOrgName = null;
+        try {
+            const orgPageUrl = `https://robertsspaceindustries.com/en/citizens/${encodeURIComponent(handle)}/organizations`;
+            const orgResponse = await fetch(orgPageUrl, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                },
+                timeout: 10000 // 10 secondi timeout
+            });
+
+            if (orgResponse.ok) {
+                const orgHtml = await orgResponse.text();
+                const $org = cheerio.load(orgHtml);
+
+                // Estrai il nome dell'organizzazione principale
+                // Cerca pattern come "Main organization" seguito dal nome
+                const mainOrgMatch = orgHtml.match(/Main organization[\s\S]*?<\/h[12]>[\s\S]*?<h[12][^>]*>([^<]+)<\/h[12]>/i);
+                if (mainOrgMatch && mainOrgMatch[1]) {
+                    mainOrgName = mainOrgMatch[1].trim();
+                }
+
+                // Se non trovato, cerca direttamente nel testo HTML
+                if (!mainOrgName) {
+                    const textContent = $org('body').text();
+                    const lines = textContent.split('\n').map(l => l.trim()).filter(l => l);
+
+                    let foundMain = false;
+                    for (let i = 0; i < lines.length; i++) {
+                        if (lines[i].toLowerCase().includes('main organization')) {
+                            for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+                                const line = lines[j];
+                                if (line &&
+                                    !line.match(/^\d+$/) &&
+                                    !line.toLowerCase().includes('members') &&
+                                    !line.toLowerCase().includes('overview') &&
+                                    line.length > 2 &&
+                                    line.length < 100) {
+                                    mainOrgName = line;
+                                    foundMain = true;
+                                    break;
+                                }
+                            }
+                            if (foundMain) break;
+                        }
+                    }
+                }
+
+                // Verifica che la main org sia "Logistic Space Economy"
+                if (mainOrgName) {
+                    mainOrgVerified = mainOrgName.trim() === 'Logistic Space Economy';
+                    console.log(`🏢 Main Org trovata: "${mainOrgName}" - Verificata: ${mainOrgVerified}`);
+                } else {
+                    console.log('⚠️ Main Org non trovata nella pagina organizzazioni');
+                }
+            } else {
+                console.log(`⚠️ Errore nel recupero pagina organizzazioni: ${orgResponse.statusText}`);
+            }
+        } catch (orgError) {
+            console.error('Errore nella verifica main org:', orgError);
+            console.error('Stack trace:', orgError.stack);
+            // Continua anche se la verifica della main org fallisce
+        }
+
+        // La verifica ha successo solo se: codice trovato E rank organizzazione >= 4 E main org = "Logistic Space Economy"
+        const verificationSuccess = codeFound && rankVerified && mainOrgVerified;
+
+        // Salva sempre le condizioni di verifica nel database (anche se non tutte sono soddisfatte)
+        // così l'utente può vedere quali condizioni sono verificate e quali no
+        try {
+            const handleLower = handle.trim().toLowerCase();
+            
+            // Prepara i dati di aggiornamento con tutte le condizioni
+            const verificationUpdateData = {
+                rsiHandle: handle.trim(),
+                verificationCodeFound: codeFound,
+                verificationRankVerified: rankVerified,
+                verificationMainOrgVerified: mainOrgVerified,
+                mainOrgName: mainOrgName,
+                organizationRank: organizationRank,
+                updatedAt: new Date()
+            };
+
+            // Se la verifica ha successo completo, imposta anche rsiVerified a true
+            if (verificationSuccess) {
+                verificationUpdateData.rsiVerified = true;
+            }
+            
+            // Aggiungi l'avatar se trovato
+            if (rsiAvatarUrl) {
+                verificationUpdateData.rsiAvatar = rsiAvatarUrl;
+            }
+
+            // Aggiorna sempre le condizioni di verifica
+            await User.findByIdAndUpdate(
+                userId,
+                { $set: verificationUpdateData },
+                { new: true }
+            );
+
+            console.log(`📝 Condizioni verifica salvate per utente ID: ${userId} -> Codice: ${codeFound ? '✓' : '✗'}, Rank: ${rankVerified ? '✓' : '✗'} (${organizationRank}/4), Main Org: ${mainOrgVerified ? '✓' : '✗'} (${mainOrgName || 'N/A'})`);
+        } catch (verificationSaveError) {
+            console.error('Errore nel salvataggio condizioni verifica:', verificationSaveError);
+            // Continua anche se il salvataggio fallisce
+        }
+
+        // Se la verifica ha successo, aggiorna anche il nome utente se possibile
+        if (verificationSuccess) {
+            try {
+                const handleLower = handle.trim().toLowerCase();
+                
+                // Verifica se l'handle RSI è già in uso da un altro utente come username
+                const existingUserWithHandle = await User.findOne({ 
+                    username: handleLower,
+                    _id: { $ne: userId }
+                });
+                
+                if (existingUserWithHandle) {
+                    // Le condizioni sono già state salvate, recupera l'utente aggiornato
+                    const user = await User.findById(userId);
+
+                    if (user) {
+                        console.log(`✅ Verifica RSI salvata (username non aggiornato - handle già in uso) per utente ID: ${userId} -> Handle: ${handle}, Rank: ${organizationRank}`);
+                        return res.json({
+                            success: true,
+                            verified: true,
+                            usernameUpdated: false,
+                            message: 'Codice di verifica trovato, ma l\'handle RSI è già utilizzato come username da un altro utente. La verifica è stata salvata ma il nome utente non è stato modificato.',
+                            user: {
+                                id: user._id,
+                                username: user.username,
+                                rsiHandle: user.rsiHandle,
+                                rsiVerified: user.rsiVerified,
+                                rsiAvatar: user.rsiAvatar,
+                                organizationRank: user.organizationRank,
+                                verificationCodeFound: user.verificationCodeFound,
+                                verificationRankVerified: user.verificationRankVerified,
+                                verificationMainOrgVerified: user.verificationMainOrgVerified,
+                                mainOrgName: user.mainOrgName
+                            }
+                        });
+                    }
+                }
+
+                // Aggiorna il nome utente (le condizioni sono già state salvate)
+                const user = await User.findByIdAndUpdate(
+                    userId,
+                    { 
+                        $set: { 
+                            username: handleLower,
+                            updatedAt: new Date()
+                        } 
+                    },
+                    { new: true }
+                );
+
+                if (user) {
+                    console.log(`✅ Verifica RSI salvata e username aggiornato per utente ID: ${userId} -> Username: ${user.username}, Handle: ${handle}, Rank: ${organizationRank}, Avatar: ${user.rsiAvatar || 'N/A'}`);
+                    return res.json({
+                        success: true,
+                        verified: true,
+                        usernameUpdated: true,
+                        message: 'Codice di verifica trovato nel profilo RSI. Verifica salvata e nome utente aggiornato con successo.',
+                        user: {
+                            id: user._id,
+                            username: user.username,
+                            rsiHandle: user.rsiHandle,
+                            rsiVerified: user.rsiVerified,
+                            rsiAvatar: user.rsiAvatar,
+                            organizationRank: user.organizationRank,
+                            verificationCodeFound: user.verificationCodeFound,
+                            verificationRankVerified: user.verificationRankVerified,
+                            verificationMainOrgVerified: user.verificationMainOrgVerified,
+                            mainOrgName: user.mainOrgName
+                        }
+                    });
+                }
+            } catch (dbError) {
+                console.error('Errore nel salvataggio verifica RSI nel database:', dbError);
+                // Continua comunque a restituire la verifica positiva anche se il salvataggio fallisce
+            }
+        }
+
+        // Costruisci il messaggio di risposta
+        let message = '';
+        if (!codeFound && !rankVerified && !mainOrgVerified) {
+            message = 'Codice di verifica non trovato, rank organizzazione insufficiente e main org non corretta';
+        } else if (!codeFound && !rankVerified) {
+            message = 'Codice di verifica non trovato e rank organizzazione insufficiente (richiesto: >= 4)';
+        } else if (!codeFound && !mainOrgVerified) {
+            message = 'Codice di verifica non trovato e main org non corretta (richiesta: "Logistic Space Economy")';
+        } else if (!rankVerified && !mainOrgVerified) {
+            message = `Rank organizzazione insufficiente (trovato: ${organizationRank}, richiesto: >= 4) e main org non corretta (trovata: "${mainOrgName || 'N/A'}", richiesta: "Logistic Space Economy")`;
+        } else if (!codeFound) {
+            message = 'Codice di verifica non trovato nel profilo RSI. Assicurati di aver inserito il codice nella tua bio o descrizione.';
+        } else if (!rankVerified) {
+            message = `Codice di verifica trovato, ma rank organizzazione insufficiente (trovato: ${organizationRank}, richiesto: >= 4)`;
+        } else if (!mainOrgVerified) {
+            message = `Codice di verifica trovato e rank verificato, ma main org non corretta (trovata: "${mainOrgName || 'N/A'}", richiesta: "Logistic Space Economy")`;
+        } else {
+            message = 'Codice di verifica trovato, rank organizzazione verificato e main org corretta';
+        }
+
+        // Recupera l'utente aggiornato con tutte le condizioni salvate
+        let updatedUser = null;
+        try {
+            updatedUser = await User.findById(userId);
+        } catch (userFetchError) {
+            console.error('Errore nel recupero utente aggiornato:', userFetchError);
+        }
+
+        return res.json({
+            success: true,
+            verified: verificationSuccess,
+            message: message,
+            organizationRank: organizationRank,
+            rankVerified: rankVerified,
+            codeFound: codeFound,
+            mainOrgVerified: mainOrgVerified,
+            mainOrgName: mainOrgName,
+            user: updatedUser ? {
+                id: updatedUser._id,
+                username: updatedUser.username,
+                rsiHandle: updatedUser.rsiHandle,
+                rsiVerified: updatedUser.rsiVerified,
+                rsiAvatar: updatedUser.rsiAvatar,
+                organizationRank: updatedUser.organizationRank,
+                verificationCodeFound: updatedUser.verificationCodeFound,
+                verificationRankVerified: updatedUser.verificationRankVerified,
+                verificationMainOrgVerified: updatedUser.verificationMainOrgVerified,
+                mainOrgName: updatedUser.mainOrgName
+            } : null
+        });
+    } catch (error) {
+        console.error('Errore nella verifica codice RSI:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server',
+            verified: false
+        });
+    }
+});
+
+// Endpoint per aggiornare il profilo utente (username)
+app.put('/api/v1/auth/profile', checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        const { username, rsiHandle, rsiVerified } = req.body;
+        const userId = req.user.userId;
+
+        if (!username) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username è richiesto'
+            });
+        }
+
+        if (username.length < 3 || username.length > 30) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username deve essere tra 3 e 30 caratteri'
+            });
+        }
+
+        const usernameLower = username.toLowerCase().trim();
+
+        // Verifica se il nuovo username è già in uso da un altro utente
+        const existingUser = await User.findOne({ 
+            username: usernameLower,
+            _id: { $ne: userId }
+        });
+        
+        if (existingUser) {
+            return res.status(409).json({
+                success: false,
+                error: 'Username già esistente'
+            });
+        }
+
+        // Prepara l'oggetto di aggiornamento
+        const updateData = {
+            username: usernameLower,
+            updatedAt: new Date()
+        };
+
+        // Aggiungi i campi RSI se forniti
+        if (rsiHandle !== undefined) {
+            updateData.rsiHandle = rsiHandle.trim() || null;
+        }
+        if (rsiVerified !== undefined) {
+            updateData.rsiVerified = rsiVerified === true;
+        }
+
+        // Aggiorna l'utente
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: updateData },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Utente non trovato'
+            });
+        }
+
+        console.log(`✅ Username aggiornato per utente ID: ${userId} -> ${user.username}${user.rsiVerified ? ' (RSI verificato)' : ''}`);
+
+        return res.json({
+            success: true,
+            message: 'Username aggiornato con successo',
+            user: {
+                id: user._id,
+                username: user.username,
+                rsiHandle: user.rsiHandle,
+                rsiVerified: user.rsiVerified,
+                rsiAvatar: user.rsiAvatar,
+                organizationRank: user.organizationRank,
+                verificationCodeFound: user.verificationCodeFound,
+                verificationRankVerified: user.verificationRankVerified,
+                verificationMainOrgVerified: user.verificationMainOrgVerified,
+                mainOrgName: user.mainOrgName
+            }
+        });
+    } catch (error) {
+        console.error('Errore nell\'aggiornamento profilo:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per salvare i membri nel database
+app.post('/api/v1/members', checkMongoConnection, async (req, res) => {
+    try {
+        const { members } = req.body;
+
+        if (!Array.isArray(members) || members.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di membri richiesto'
+            });
+        }
+
+        // Opzioni: elimina tutti i membri esistenti e inserisci i nuovi, oppure aggiorna/inserisci
+        const replaceAll = req.query.replace === 'true';
+
+        if (replaceAll) {
+            // Elimina tutti i membri esistenti
+            await Member.deleteMany({});
+        }
+
+        // Controlla quali membri sono nel database eliminati
+        const errors = [];
+        const membersToProcess = [];
+
+        for (const member of members) {
+            // Verifica se il membro esiste nel database eliminati
+            const deletedMember = await DeletedMember.findOne({
+                $or: [
+                    { key: member.key },
+                    { name: member.name, id: member.id },
+                    { index: member.index }
+                ]
+            });
+
+            if (deletedMember) {
+                errors.push({
+                    member: member.name || member.index || `key=${member.key}`,
+                    error: `Membro "${member.name || member.index || member.key}" è presente nel database dei membri eliminati e non può essere caricato`
+                });
+                console.warn(`⚠️ Membro "${member.name || member.index || member.key}" (key=${member.key}) è nel database eliminati, saltato`);
+                continue; // Salta questo membro
+            }
+
+            membersToProcess.push(member);
+        }
+
+        // Prepara i membri per l'inserimento/aggiornamento (solo quelli non eliminati)
+        const operations = membersToProcess.map(member => ({
+            updateOne: {
+                filter: { key: member.key },
+                update: {
+                    $set: {
+                        key: member.key,
+                        index: member.index || '',
+                        tag: member.tag || 'LSE-P',
+                        name: member.name || '',
+                        id: member.id || '',
+                        date: member.date || '',
+                        idoneita: member.idoneita || false,
+                        watchdog: member.watchdog || member.daTenereDOcchio || false, // Supporta anche il vecchio nome per compatibilità
+                        promoted: member.promoted || false,
+                        affiliazioniOrg: member.affiliazioniOrg || '',
+                        orgValidation: member.orgValidation || null,
+                        note: member.note || '',
+                        updatedAt: new Date()
+                    }
+                },
+                upsert: true // Inserisci se non esiste, aggiorna se esiste
+            }
+        }));
+
+        // Esegui le operazioni in batch solo per i membri validi
+        let result = { upsertedCount: 0, modifiedCount: 0 };
+        if (operations.length > 0) {
+            result = await Member.bulkWrite(operations);
+        }
+
+        // Se nessun membro è stato elaborato (tutti saltati), restituisci errore
+        if (membersToProcess.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Tutti i membri sono presenti nel database eliminati e non possono essere aggiunti'
+            });
+        }
+
+        // Per aggiunta singola, restituisci il membro aggiunto/aggiornato
+        let responseData = {
+            success: true,
+            message: `Salvati ${result.upsertedCount + result.modifiedCount} membri${errors.length > 0 ? `, ${errors.length} membri saltati (presenti nel database eliminati)` : ''}`,
+            inserted: result.upsertedCount,
+            updated: result.modifiedCount,
+            total: members.length,
+            processed: membersToProcess.length,
+            errors: errors.length > 0 ? errors : undefined
+        };
+
+        if (members.length === 1 && membersToProcess.length === 1) {
+            const addedMember = await Member.findOne({ key: members[0].key });
+            if (addedMember) {
+                responseData.member = addedMember;
+            }
+        }
+
+        return res.json(responseData);
+    } catch (error) {
+        console.error('Errore nel salvataggio membri:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// GET /api/v1/members - Ottieni tutti i membri con paginazione e filtri
+app.get('/api/v1/members', checkMongoConnection, async (req, res) => {
+    try {
+        console.log('📥 Richiesta GET /api/members ricevuta');
+
+        // Parametri di paginazione
+        const page = parseInt(req.query.page) || 1;
+        const limit = Math.min(parseInt(req.query.limit) || 21, 100); // Default 21, max 100 per pagina
+        const skip = (page - 1) * limit;
+
+        // Parametri di filtro
+        const { tag, idoneita, search, validation } = req.query;
+
+        // Costruzione query ottimizzata
+        let query = {};
+
+        // Escludi membri eliminati usando $nin con chiavi eliminate
+        const deletedMembers = await DeletedMember.find({}, 'key').lean();
+        const deletedKeyArray = deletedMembers.map(d => d.key);
+        if (deletedKeyArray.length > 0) {
+            query.key = { $nin: deletedKeyArray };
+        }
+
+        // Filtro per tag
+        if (tag) {
+            query.tag = tag;
+        }
+
+        // Filtro per idoneità
+        if (idoneita && idoneita !== 'Tutti') {
+            if (idoneita === 'Idonei') {
+                query.idoneita = true;
+            } else if (idoneita === 'Non Idonei') {
+                query.idoneita = false;
+            }
+        }
+
+        // Filtro per validazione
+        if (validation && validation !== 'Tutti') {
+            if (validation === 'Validazione fallita') {
+                query['orgValidation.isValid'] = false;
+            } else if (validation === 'Validazione superata') {
+                query['orgValidation.isValid'] = true;
+            }
+        }
+
+        // Ricerca per nome/index/key con regex (case insensitive)
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { index: { $regex: search, $options: 'i' } },
+                { key: parseInt(search) || -1 } // Fallback se non è numero
+            ];
+        }
+
+        console.log('Query ottimizzata:', JSON.stringify(query));
+
+        // Esecuzione query con paginazione
+        const members = await Member.find(query)
+            .sort({ key: 1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        // Conteggio totale per paginazione
+        const total = await Member.countDocuments(query);
+
+        console.log(`📊 Found ${members.length} members (page ${page}, limit ${limit}, total ${total})`);
+        console.log(`Query executed:`, JSON.stringify(query));
+
+        // Calcola info paginazione
+        const totalPages = Math.ceil(total / limit);
+        const hasNext = page < totalPages;
+        const hasPrev = page > 1;
+
+        // Migrazione: converti daTenereDOcchio a watchdog se presente
+        const migratedMembers = members.map(member => {
+            if (member.daTenereDOcchio !== undefined && member.watchdog === undefined) {
+                member.watchdog = member.daTenereDOcchio;
+                delete member.daTenereDOcchio;
+                // Opzionalmente, salva la migrazione nel DB
+                Member.updateOne({ _id: member._id }, { $set: { watchdog: member.watchdog }, $unset: { daTenereDOcchio: 1 } }).catch(err => {
+                    console.warn('Error migrating watchdog field for member', { memberKey: member.key, error: err.message });
+                });
+            }
+            return member;
+        });
+
+        const responseData = {
+            success: true,
+            members: migratedMembers,
+            pagination: {
+                currentPage: page,
+                totalPages: totalPages,
+                totalItems: total,
+                itemsPerPage: limit,
+                hasNext: hasNext,
+                hasPrev: hasPrev
+            },
+            filters: {
+                applied: { tag, idoneita, search, validation },
+                available: {
+                    tags: ['LSE-P', 'LSE'],
+                    idoneita: ['Tutti', 'Idonei', 'Non Idonei'],
+                    validation: ['Tutti', 'Validazione superata', 'Validazione fallita']
+                }
+            }
+        };
+        console.log(`📤 Invio risposta: ${migratedMembers.length} membri`);
+        return res.json(responseData);
+    } catch (error) {
+        console.error('❌ Errore nel recupero membri:', error);
+        console.error('Stack:', error.stack);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+
+        // Filtra i membri escludendo quelli presenti nel database eliminati
+        const validMembers = members.filter(member => {
+            // Verifica se il membro è nel database eliminati
+            if (deletedKeys.has(member.key)) {
+                return false;
+            }
+            if (deletedNameIdPairs.has(`${member.name}|${member.id}`)) {
+                return false;
+            }
+            if (member.index && deletedIndexes.has(member.index)) {
+                return false;
+            }
+            return true;
+        });
+        logger.debug(`${validMembers.length} valid members after filtering`);
+
+        // Migrazione: converti daTenereDOcchio a watchdog se presente
+        const migratedMembers = validMembers.map(member => {
+            if (member.daTenereDOcchio !== undefined && member.watchdog === undefined) {
+                member.watchdog = member.daTenereDOcchio;
+                delete member.daTenereDOcchio;
+                // Opzionalmente, salva la migrazione nel DB
+                Member.updateOne({ _id: member._id }, { $set: { watchdog: member.watchdog }, $unset: { daTenereDOcchio: 1 } }).catch(err => {
+                    logger.warn('Error migrating watchdog field for member', { memberKey: member.key, error: err.message });
+                });
+            }
+            return member;
+        });
+
+        // Se ci sono membri nel database principale che sono anche nel database eliminati, rimuovili
+        const membersToRemove = members.filter(member => {
+            if (deletedKeys.has(member.key) || deletedNameIdPairs.has(`${member.name}|${member.id}`) || (member.index && deletedIndexes.has(member.index))) {
+                return true;
+            }
+            return false;
+        });
+
+        if (membersToRemove.length > 0) {
+            logger.info(`Removing ${membersToRemove.length} members from main database (present in deleted database)`);
+
+        }
+
+        const responseData = {
+            success: true,
+            members: migratedMembers,
+            count: migratedMembers.length
+        };
+        console.log(`📤 Invio risposta: ${responseData.count} membri`);
+        return res.json(responseData);
+    } catch (error) {
+        console.error('❌ Errore nel recupero membri:', error);
+        console.error('Stack:', error.stack);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per resettare la validazione di tutti i membri (DEVE essere PRIMA della route con parametro)
+app.put('/api/v1/members/reset-validation/all', checkMongoConnection, async (req, res) => {
+    try {
+        const result = await Member.updateMany(
+            {},
+            {
+                $set: {
+                    affiliazioniOrg: '',
+                    orgValidation: null,
+                    updatedAt: new Date()
+                }
+            }
+        );
+
+        console.log(`🔄 Validazione resettata per ${result.modifiedCount} membri`);
+
+        return res.json({
+            success: true,
+            message: `Validazione resettata con successo per ${result.modifiedCount} membri`,
+            modifiedCount: result.modifiedCount
+        });
+    } catch (error) {
+        console.error('Errore nel reset validazione di tutti i membri:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per resettare la validazione di un membro (DEVE essere DOPO la route /all)
+app.put('/api/v1/members/:key/reset-validation', checkMongoConnection, async (req, res) => {
+    try {
+        const { key } = req.params;
+
+        const member = await Member.findOneAndUpdate(
+            { key: parseInt(key) },
+            {
+                $set: {
+                    affiliazioniOrg: '',
+                    orgValidation: null,
+                    updatedAt: new Date()
+                }
+            },
+            { new: true }
+        );
+
+        if (!member) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
+        console.log(`🔄 Validazione resettata per membro key=${key} (${member.name})`);
+
+        return res.json({
+            success: true,
+            message: 'Validazione resettata con successo',
+            member: member
+        });
+    } catch (error) {
+        console.error('Errore nel reset validazione:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per validare un membro (controlla affiliazioni org RSI)
+app.post('/api/v1/members/:key/validate', checkMongoConnection, async (req, res) => {
+    try {
+        const { key } = req.params;
+
+        // Trova il membro
+        const member = await Member.findOne({ key: parseInt(key) });
+        if (!member) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
+        // Verifica che abbia un nome Discord (usato come handle RSI)
+        if (!member.name || member.name.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                error: 'Il membro non ha un nome Discord associato'
+            });
+        }
+
+        // Estrai l'handle RSI dal nome Discord (rimuovi # e discriminatore)
+        const rsiHandle = member.name.split('#')[0].trim();
+        if (!rsiHandle) {
+            return res.status(400).json({
+                success: false,
+                error: 'Impossibile estrarre l\'handle RSI dal nome Discord'
+            });
+        }
+
+        console.log(`🔍 Validazione membro key=${key} (${member.name}) con handle RSI estratto: ${rsiHandle}`);
+
+        // Chiama l'endpoint per ottenere le affiliazioni org
+        const orgsResponse = await fetch(`${req.protocol}://${req.get('host')}/api/v1/rsi/orgs/${encodeURIComponent(rsiHandle)}`, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+
+        if (!orgsResponse.ok) {
+            console.error(`❌ Errore nel recupero affiliazioni per ${member.id}: ${orgsResponse.status}`);
+            return res.status(orgsResponse.status).json({
+                success: false,
+                error: `Errore nel recupero dati RSI: ${orgsResponse.statusText}`
+            });
+        }
+
+        const orgsData = await orgsResponse.json();
+
+        // Aggiorna il membro con i dati di validazione
+        const updateData = {
+            affiliazioniOrg: orgsData.orgs_string || '',
+            orgValidation: orgsData.validation || null,
+            updatedAt: new Date()
+        };
+
+        const updatedMember = await Member.findOneAndUpdate(
+            { key: parseInt(key) },
+            { $set: updateData },
+            { new: true }
+        );
+
+        console.log(`✅ Validazione completata per membro key=${key} (${member.name}):`, {
+            isValid: orgsData.validation?.isValid,
+            mainOrg: orgsData.validation?.mainOrgName,
+            issues: orgsData.validation?.issues?.length || 0
+        });
+
+        return res.json({
+            success: true,
+            message: 'Validazione completata',
+            member: updatedMember,
+            validation: orgsData.validation
+        });
+
+    } catch (error) {
+        console.error('Errore nella validazione membro:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per aggiornare un singolo membro
+app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
+    try {
+        const { key } = req.params;
+        const updateData = req.body;
+
+        // Rimuovi _id e createdAt se presenti per evitare conflitti
+        delete updateData._id;
+        delete updateData.createdAt;
+        updateData.updatedAt = new Date();
+
+        // Migrazione: converti daTenereDOcchio a watchdog se presente
+        if (updateData.daTenereDOcchio !== undefined && updateData.watchdog === undefined) {
+            updateData.watchdog = updateData.daTenereDOcchio;
+            delete updateData.daTenereDOcchio;
+        }
+
+        // Log per verificare che orgValidation venga salvata
+        if (updateData.orgValidation) {
+            console.log(`💾 Salvataggio validazione per membro key=${key}:`, {
+                isValid: updateData.orgValidation.isValid,
+                hasOnlyOneOrg: updateData.orgValidation.hasOnlyOneOrg,
+                hasMainName: updateData.orgValidation.hasMainName,
+                mainOrgName: updateData.orgValidation.mainOrgName,
+                issuesCount: updateData.orgValidation.issues?.length || 0
+            });
+        }
+
+        // Prima ottieni il membro corrente per verificare se viene promosso
+        const currentMember = await Member.findOne({ key: parseInt(key) });
+
+        if (!currentMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
+        // Se il membro viene promosso (da false a true), spostalo nella collezione PromotedMember
+        if (updateData.promoted === true && currentMember.promoted === false) {
+            logger.info(`🚀 Promozione membro: ${currentMember.name} (key: ${key})`);
+
+            // Crea il membro promosso
+            const promotedMemberData = {
+                ...currentMember.toObject(),
+                ...updateData,
+                tag: 'LSE', // I membri promossi hanno tag LSE
+                idoneita: true, // I membri promossi sono sempre idonei
+                promoted: true,
+                promotedAt: new Date(),
+                promotedBy: req.user?.username || req.user?.email || 'system',
+                originalMemberId: currentMember._id,
+                promotionReason: updateData.promotionReason || '',
+                updatedAt: new Date()
+            };
+
+            // Rimuovi campi non necessari
+            delete promotedMemberData._id;
+            delete promotedMemberData.__v;
+
+            // Crea il nuovo membro promosso
+            const promotedMember = await PromotedMember.create(promotedMemberData);
+
+            // Rimuovi il membro dalla collezione originale
+            await Member.findByIdAndDelete(currentMember._id);
+
+            logger.info(`✅ Membro promosso creato in PromotedMember: ${promotedMember.name}`);
+
+            return res.json({
+                success: true,
+                member: promotedMember,
+                message: 'Membro promosso con successo'
+            });
+        }
+
+        // Aggiornamento normale per membri non promossi
+        const member = await Member.findOneAndUpdate(
+            { key: parseInt(key) },
+            { $set: updateData },
+            { new: true, upsert: false }
+        );
+
+        if (!member) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
+        // Verifica che orgValidation sia stata salvata correttamente
+        if (updateData.orgValidation && member.orgValidation) {
+            console.log(`✅ Validazione confermata nel database per membro key=${key}`);
+        }
+
+        return res.json({
+            success: true,
+            member: member
+        });
+    } catch (error) {
+        console.error('Errore nell\'aggiornamento membro:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// ========================= PROMOTED MEMBERS ENDPOINTS =========================
+
+// GET /api/v1/promoted-members - Ottieni tutti i membri promossi
+app.get('/api/v1/promoted-members', checkMongoConnection, async (req, res) => {
+    try {
+        console.log('📥 Richiesta GET /api/promoted-members ricevuta');
+
+        const {
+            tag,
+            search,
+            sortBy = 'promotedAt',
+            sortOrder = 'desc',
+            limit = 100
+        } = req.query;
+
+        let query = {};
+
+        // Filtro per tag
+        if (tag) {
+            query.tag = tag;
+        }
+
+        // Ricerca per nome
+        if (search) {
+            query.name = { $regex: search, $options: 'i' };
+        }
+
+        let sortOptions = {};
+        sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+        const promotedMembers = await PromotedMember
+            .find(query)
+            .sort(sortOptions)
+            .limit(parseInt(limit))
+            .lean();
+
+        console.log(`📊 Trovati ${promotedMembers.length} membri promossi`);
+
+        return res.json({
+            success: true,
+            members: promotedMembers,
+            total: promotedMembers.length
+        });
+    } catch (error) {
+        console.error('Errore nel recupero membri promossi:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// GET /api/v1/promoted-members/:key - Ottieni un membro promosso specifico
+app.get('/api/v1/promoted-members/:key', checkMongoConnection, async (req, res) => {
+    try {
+        const { key } = req.params;
+
+        const promotedMember = await PromotedMember.findOne({ key: parseInt(key) }).lean();
+
+        if (!promotedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro promosso non trovato'
+            });
+        }
+
+        return res.json({
+            success: true,
+            member: promotedMember
+        });
+    } catch (error) {
+        console.error('Errore nel recupero membro promosso:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// PUT /api/v1/promoted-members/:key - Aggiorna un membro promosso
+app.put('/api/v1/promoted-members/:key', checkMongoConnection, async (req, res) => {
+    try {
+        const { key } = req.params;
+        const updateData = req.body;
+
+        // Rimuovi campi protetti
+        delete updateData._id;
+        delete updateData.createdAt;
+        delete updateData.promotedAt;
+        delete updateData.originalMemberId;
+        updateData.updatedAt = new Date();
+
+        const promotedMember = await PromotedMember.findOneAndUpdate(
+            { key: parseInt(key) },
+            { $set: updateData },
+            { new: true, upsert: false }
+        );
+
+        if (!promotedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro promosso non trovato'
+            });
+        }
+
+        return res.json({
+            success: true,
+            member: promotedMember
+        });
+    } catch (error) {
+        console.error('Errore nell\'aggiornamento membro promosso:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// DELETE /api/v1/promoted-members/:key - Elimina un membro promosso (spostalo nei deleted-members)
+app.delete('/api/v1/promoted-members/:key', strictLimiter, checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        const { key } = req.params;
+        const { deletionReasons } = req.body || {};
+
+        // Trova il membro promosso da eliminare
+        const promotedMember = await PromotedMember.findOne({ key: parseInt(key) });
+
+        if (!promotedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro promosso non trovato'
+            });
+        }
+
+        // Recupera l'username dell'utente autenticato
+        const deletedByUsername = req.user?.username || req.user?.email || 'system';
+        const deletedAt = new Date();
+
+        // Prepara i motivi di eliminazione
+        let finalDeletionReasons = [];
+        if (Array.isArray(deletionReasons)) {
+            finalDeletionReasons = deletionReasons;
+        } else if (typeof deletionReasons === 'string') {
+            finalDeletionReasons = [deletionReasons];
+        }
+
+        // Crea il record nel database eliminati
+        const deletedMemberData = {
+            ...promotedMember.toObject(),
+            deletedAt: deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons,
+            originalCreatedAt: promotedMember.createdAt,
+            originalUpdatedAt: promotedMember.updatedAt
+        };
+
+        // Rimuovi campi non necessari per il deleted member
+        delete deletedMemberData._id;
+        delete deletedMemberData.__v;
+        delete deletedMemberData.promotedAt;
+        delete deletedMemberData.promotedBy;
+        delete deletedMemberData.originalMemberId;
+
+        const deletedMember = await DeletedMember.create(deletedMemberData);
+
+        // Rimuovi il membro promosso dalla collezione originale
+        await PromotedMember.findOneAndDelete({ key: parseInt(key) });
+
+        console.log(`✅ Membro promosso key=${key} (${promotedMember.name}) eliminato e spostato nei deleted-members`);
+
+        return res.json({
+            success: true,
+            message: 'Membro promosso eliminato con successo',
+            deletedAt: deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons
+        });
+    } catch (error) {
+        console.error('Errore nell\'eliminazione membro promosso:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per recuperare i membri eliminati
+app.get('/api/v1/deleted-members', checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        console.log('🔍 Richiesta membri eliminati da:', req.user?.username || 'unknown');
+
+        // Conta tutti i documenti nella collection
+        const totalCount = await DeletedMember.countDocuments({});
+        console.log(`📊 Totale documenti nella collection deletedmembers: ${totalCount}`);
+
+        const deletedMembers = await DeletedMember.find({})
+            .sort({ deletedAt: -1 }) // Ordina per data eliminazione (più recenti prima)
+            .lean();
+
+        console.log(`📋 Trovati ${deletedMembers.length} membri eliminati nel database`);
+        if (deletedMembers.length > 0) {
+            console.log('📝 Primi membri eliminati:', deletedMembers.slice(0, 2).map(m => ({
+                name: m.name,
+                key: m.key,
+                deletedBy: m.deletedBy,
+                deletedAt: m.deletedAt
+            })));
+        }
+
+        return res.json({
+            success: true,
+            members: deletedMembers,
+            count: deletedMembers.length
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero membri eliminati:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per ripristinare un membro eliminato
+app.post('/api/v1/deleted-members/:key/restore', checkMongoConnection, authenticateToken, async (req, res) => {
+    console.log(`📥 Richiesta POST /api/v1/deleted-members/:key/restore ricevuta`);
+    console.log(`📥 Params:`, req.params);
+    console.log(`📥 Headers:`, req.headers);
+    try {
+        const { key } = req.params;
+        console.log(`🔄 Tentativo di ripristino membro key=${key}`);
+
+        // Trova il membro nel database eliminati
+        const deletedMember = await DeletedMember.findOne({ key: parseInt(key) });
+
+        if (!deletedMember) {
+            console.error(`❌ Membro eliminato key=${key} non trovato`);
+            return res.status(404).json({
+                success: false,
+                error: 'Membro eliminato non trovato'
+            });
+        }
+
+        console.log(`📋 Membro eliminato trovato: ${deletedMember.name}, key=${deletedMember.key}`);
+
+        // Verifica se il membro esiste già nel database principale
+        const existingMember = await Member.findOne({ key: parseInt(key) });
+        if (existingMember) {
+            console.error(`❌ Membro key=${key} esiste già nel database principale`);
+            return res.status(409).json({
+                success: false,
+                error: 'Un membro con questa key esiste già nel database principale'
+            });
+        }
+
+        // Prepara i dati del membro da ripristinare (escludi i campi specifici dei membri eliminati)
+        const memberData = deletedMember.toObject();
+        delete memberData._id;
+        delete memberData.deletedAt;
+        delete memberData.deletedBy;
+        delete memberData.originalCreatedAt;
+        delete memberData.originalUpdatedAt;
+
+        // Assicurati che i campi obbligatori siano presenti
+        if (!memberData.key) {
+            console.error(`❌ Key mancante per membro eliminato`);
+            return res.status(400).json({
+                success: false,
+                error: 'Key del membro mancante'
+            });
+        }
+        if (!memberData.name) {
+            console.error(`❌ Nome mancante per membro key=${memberData.key}`);
+            return res.status(400).json({
+                success: false,
+                error: 'Nome del membro mancante'
+            });
+        }
+
+        // Assicurati che i campi opzionali abbiano valori di default
+        memberData.index = memberData.index || '';
+        memberData.tag = memberData.tag || 'LSE-P';
+        memberData.id = memberData.id || '';
+        memberData.date = memberData.date || '';
+        memberData.idoneita = memberData.idoneita !== undefined ? memberData.idoneita : false;
+        memberData.watchdog = memberData.watchdog !== undefined ? memberData.watchdog : false;
+        memberData.promoted = memberData.promoted !== undefined ? memberData.promoted : false;
+        memberData.affiliazioniOrg = memberData.affiliazioniOrg || '';
+        memberData.note = memberData.note || '';
+
+        // Gestisci orgValidation: se è un oggetto, assicurati che sia valido, altrimenti null
+        if (memberData.orgValidation && typeof memberData.orgValidation === 'object') {
+            // Assicurati che i campi booleani siano booleani
+            if (memberData.orgValidation.isValid !== undefined) {
+                memberData.orgValidation.isValid = Boolean(memberData.orgValidation.isValid);
+            }
+            if (memberData.orgValidation.hasOnlyOneOrg !== undefined) {
+                memberData.orgValidation.hasOnlyOneOrg = Boolean(memberData.orgValidation.hasOnlyOneOrg);
+            }
+            if (memberData.orgValidation.hasMainName !== undefined) {
+                memberData.orgValidation.hasMainName = Boolean(memberData.orgValidation.hasMainName);
+            }
+        } else {
+            memberData.orgValidation = null;
+        }
+
+        // Ripristina le date originali se disponibili, altrimenti usa le date attuali
+        const createdAt = deletedMember.originalCreatedAt || memberData.createdAt || new Date();
+        const updatedAt = deletedMember.originalUpdatedAt || memberData.updatedAt || new Date();
+
+        console.log(`💾 Preparazione dati ripristino:`, {
+            key: memberData.key,
+            name: memberData.name,
+            hasOrgValidation: !!memberData.orgValidation,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        });
+
+        // Prepara l'oggetto di update
+        const updateObj = {
+            $set: {
+                key: parseInt(key),
+                index: memberData.index,
+                tag: memberData.tag,
+                name: memberData.name,
+                id: memberData.id,
+                date: memberData.date,
+                idoneita: memberData.idoneita,
+                watchdog: memberData.watchdog,
+                promoted: memberData.promoted,
+                affiliazioniOrg: memberData.affiliazioniOrg,
+                note: memberData.note,
+                updatedAt: updatedAt
+            },
+            $setOnInsert: {
+                createdAt: createdAt
+            }
+        };
+
+        // Aggiungi orgValidation solo se non è null
+        if (memberData.orgValidation !== null) {
+            updateObj.$set.orgValidation = memberData.orgValidation;
+        } else {
+            updateObj.$set.orgValidation = null;
+        }
+
+        // Salva il membro nel database principale
+        console.log(`💾 Salvataggio membro nel database principale...`);
+        const restoredMember = await Member.findOneAndUpdate(
+            { key: parseInt(key) },
+            updateObj,
+            {
+                new: true,
+                upsert: true,
+                runValidators: true,
+                setDefaultsOnInsert: true
+            }
+        );
+
+        if (!restoredMember) {
+            console.error(`❌ Impossibile creare/aggiornare membro key=${key}`);
+            return res.status(500).json({
+                success: false,
+                error: 'Impossibile ripristinare il membro nel database'
+            });
+        }
+
+        console.log(`✅ Membro key=${key} (${deletedMember.name}) ripristinato nel database principale`);
+
+        // Elimina il membro dal database eliminati
+        await DeletedMember.findOneAndDelete({ key: parseInt(key) });
+        console.log(`🗑️ Membro key=${key} (${deletedMember.name}) rimosso dal database eliminati`);
+
+        return res.json({
+            success: true,
+            message: 'Membro ripristinato con successo',
+            member: restoredMember
+        });
+    } catch (error) {
+        console.error('❌ Errore nel ripristino membro:', error);
+        console.error('Stack trace:', error.stack);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server',
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// Endpoint per eliminare un membro (salva nel DB eliminati prima di rimuovere)
+app.delete('/api/v1/members/:key', strictLimiter, checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        const { key } = req.params;
+        const { deletionReasons } = req.body || {};
+
+        // Trova il membro da eliminare
+        const member = await Member.findOne({ key: parseInt(key) });
+
+        if (!member) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
+        // Recupera l'username dell'utente autenticato
+        console.log(`🔍 Dati utente autenticato:`, {
+            user: req.user,
+            username: req.user?.username,
+            userId: req.user?.userId
+        });
+        const deletedByUsername = req.user?.username || 'system';
+        const deletedAt = new Date();
+
+        console.log(`📝 Eliminazione membro key=${key} da parte di: ${deletedByUsername}`);
+        
+        // Assicurati che deletionReasons sia sempre un array
+        const finalDeletionReasons = Array.isArray(deletionReasons) ? deletionReasons : [];
+        
+        if (finalDeletionReasons.length > 0) {
+            console.log(`📋 Motivazioni eliminazione (${finalDeletionReasons.length}):`, finalDeletionReasons);
+        } else {
+            console.log(`⚠️ Nessuna motivazione specificata per l'eliminazione`);
+        }
+
+        // Salva il membro nel database dei membri eliminati
+        const memberData = member.toObject();
+        const deletedMemberData = {
+            ...memberData,
+            deletedAt: deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons, // Sempre un array, anche se vuoto
+            originalCreatedAt: memberData.createdAt,
+            originalUpdatedAt: memberData.updatedAt
+        };
+
+        // Rimuovi _id per evitare conflitti
+        delete deletedMemberData._id;
+
+        const deletedMember = new DeletedMember(deletedMemberData);
+        await deletedMember.save();
+        console.log(`🗑️ Membro key=${key} (${member.name}) eliminato da ${deletedByUsername} il ${deletedAt.toISOString()}`);
+        console.log(`   💾 Salvato con ${finalDeletionReasons.length} motivazioni di eliminazione`);
+
+        // Elimina il membro dal database principale
+        await Member.findOneAndDelete({ key: parseInt(key) });
+        console.log(`✅ Membro key=${key} (${member.name}) eliminato dal database principale`);
+
+        return res.json({
+            success: true,
+            message: 'Membro eliminato con successo e salvato nel database eliminati',
+            deletedAt: deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons // Sempre un array
+        });
+    } catch (error) {
+        console.error('Errore nell\'eliminazione membro:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per ottenere le affiliazioni org di un utente RSI
+// Usa la pagina pubblica delle organizzazioni invece dell'API
+app.get('/api/v1/rsi/orgs/:handle', async (req, res) => {
+    const { handle } = req.params;
+
+    if (!handle) {
+        return res.status(400).json({
+            success: false,
+            error: 'Handle utente richiesto'
+        });
+    }
+
+    try {
+        // Controlla cache
+        const cacheKey = `rsi:orgs:${handle.toLowerCase()}`;
+        const cachedResult = await cache.get(cacheKey);
+        if (cachedResult) {
+            logger.debug(`Cache HIT per ${cacheKey}`);
+            return res.status(200).json({ ...cachedResult, _cached: true });
+        }
+
+        // Usa l'URL pubblico della pagina organizzazioni
+        const orgPageUrl = `https://robertsspaceindustries.com/en/citizens/${encodeURIComponent(handle)}/organizations`;
+
+        const response = await fetch(orgPageUrl, {
+            method: 'GET',
+            headers: {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            },
+            timeout: 10000 // 10 secondi timeout
+        });
+
+        if (!response.ok) {
+            // Se la risposta non è ok, restituisci comunque una validazione fallita
+            const isNotFound = response.status === 404 || response.statusText.toLowerCase().includes('not found');
+            const orgsString = isNotFound ? '404' : 'NO ORG MEMBERSHIP FOUND IN PUBLIC RECORDS';
+            const issueMessage = isNotFound ? 'Errore nel recupero dati: Not Found' : `Errore nel recupero dati: ${response.statusText}`;
+
+            return res.status(response.status).json({
+                success: true,
+                error: `Errore nel recupero pagina: ${response.statusText}`,
+                user_handle: handle,
+                orgs: [],
+                orgs_string: orgsString,
+                count: 0,
+                validation: {
+                    isValid: false,
+                    hasOnlyOneOrg: false,
+                    hasMainName: false,
+                    mainOrgName: null,
+                    issues: [issueMessage]
+                }
+            });
+        }
+
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        const orgs = [];
+
+        // Estrai il nome dell'organizzazione principale dalla pagina
+        // Cerca pattern come "Main organization" seguito dal nome
+        let mainOrgName = null;
+        let mainOrgRank = null;
+
+        // Cerca il nome dell'organizzazione principale
+        // Pattern: cerca dopo "Main organization" o nel contenuto principale
+        const mainOrgMatch = html.match(/Main organization[\s\S]*?<\/h[12]>[\s\S]*?<h[12][^>]*>([^<]+)<\/h[12]>/i);
+        if (mainOrgMatch && mainOrgMatch[1]) {
+            mainOrgName = mainOrgMatch[1].trim();
+        }
+
+        // Se non trovato, cerca direttamente nel testo HTML
+        if (!mainOrgName) {
+            // Cerca pattern come "Main organization" seguito da testo
+            const textContent = $('body').text();
+            const lines = textContent.split('\n').map(l => l.trim()).filter(l => l);
+
+            // Cerca "Main organization" e prendi il nome successivo
+            let foundMain = false;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].toLowerCase().includes('main organization')) {
+                    // Cerca il nome nelle righe successive (di solito è il prossimo elemento non vuoto)
+                    for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+                        const line = lines[j];
+                        // Ignora righe con solo numeri o etichette comuni
+                        if (line &&
+                            !line.match(/^\d+$/) &&
+                            !line.toLowerCase().includes('members') &&
+                            !line.toLowerCase().includes('overview') &&
+                            line.length > 2 &&
+                            line.length < 100) {
+                            mainOrgName = line;
+                            foundMain = true;
+                            break;
+                        }
+                    }
+                    if (foundMain) break;
+                }
+            }
+        }
+
+        // Estrai Organization rank
+        // Cerca pattern come "Organization rank **Responsabile di Settore**"
+        const rankMatch = html.match(/Organization rank[^:]*:\s*\*{0,2}([^<\n*]+)\*{0,2}/i) ||
+            html.match(/rank[^:]*:\s*\*{0,2}([^<\n*]+)\*{0,2}/i) ||
+            html.match(/Organization rank[^:]*:\s*([^<\n]+)/i) ||
+            html.match(/rank[^:]*:\s*([^<\n]+)/i);
+        if (rankMatch && rankMatch[1]) {
+            mainOrgRank = rankMatch[1].trim().replace(/<[^>]+>/g, '').replace(/\*/g, '').trim();
+        }
+
+        // Estrai l'immagine dell'organizzazione principale
+        let mainOrgImageUrl = null;
+        if (mainOrgName) {
+            // Cerca l'immagine dell'org nella pagina usando cheerio (più affidabile)
+            // Cerca immagini nella sezione dell'organizzazione principale
+            const orgSection = $('body').find('[class*="org"], [id*="org"], .organization, .org-item, h1, h2').filter((i, el) => {
+                const text = $(el).text().toLowerCase();
+                return text.includes('main organization') || text.includes(mainOrgName.toLowerCase());
+            }).first().closest('div, section, article').first();
+
+            // Cerca immagini nella sezione trovata o in tutto il body
+            const searchArea = orgSection.length > 0 ? orgSection : $('body');
+
+            // Cerca immagini con pattern comuni per org
+            const orgImg = searchArea.find('img[src*="orgs"], img[src*="organization"], img[src*="/media/"]').first();
+
+            if (orgImg.length > 0) {
+                let src = orgImg.attr('src') || orgImg.attr('data-src');
+                if (src) {
+                    // Rimuovi query parameters e fragment
+                    src = src.split('?')[0].split('#')[0];
+                    mainOrgImageUrl = src.startsWith('http')
+                        ? src
+                        : `https://robertsspaceindustries.com${src}`;
+                    console.log(`🖼️ Immagine org trovata nella pagina: ${mainOrgImageUrl}`);
+                }
+            }
+
+            // Se non trovata, cerca con regex pattern
+            if (!mainOrgImageUrl) {
+                const imgPatterns = [
+                    /<img[^>]*src=["']([^"']*\/media\/orgs[^"']*\.(jpg|jpeg|png|webp))["'][^>]*>/i,
+                    /<img[^>]*src=["']([^"']*\/media\/[^"']*org[^"']*\.(jpg|jpeg|png|webp))["'][^>]*>/i,
+                    /background-image:\s*url\(["']?([^"')]*\/media\/orgs[^"')]*)["']?\)/i
+                ];
+
+                for (const pattern of imgPatterns) {
+                    const match = html.match(pattern);
+                    if (match && match[1]) {
+                        let src = match[1].split('?')[0].split('#')[0];
+                        mainOrgImageUrl = src.startsWith('http')
+                            ? src
+                            : `https://robertsspaceindustries.com${src}`;
+                        console.log(`🖼️ Immagine org trovata (regex): ${mainOrgImageUrl}`);
+                        break;
+                    }
+                }
+            }
+
+            // Se ancora non trovata, prova a cercare nella pagina dell'organizzazione stessa
+            if (!mainOrgImageUrl && mainOrgName) {
+                try {
+                    // Costruisci lo slug dell'org
+                    const orgSlug = mainOrgName.toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-+|-+$/g, '');
+
+                    // Prova a recuperare l'immagine dalla pagina dell'organizzazione
+                    const orgPageUrl = `https://robertsspaceindustries.com/orgs/${orgSlug}`;
+                    console.log(`🔍 Tentativo di recuperare immagine dalla pagina org: ${orgPageUrl}`);
+
+                    try {
+                        const orgPageResponse = await fetch(orgPageUrl, {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                            }
+                        });
+
+                        if (orgPageResponse.ok) {
+                            const orgPageHtml = await orgPageResponse.text();
+                            const $orgPage = cheerio.load(orgPageHtml);
+
+                            // Cerca l'immagine del logo nella pagina dell'org
+                            const logoImg = $orgPage('img[src*="logo"], img[src*="banner"], img[src*="/media/orgs"]').first();
+                            if (logoImg.length > 0) {
+                                let src = logoImg.attr('src') || logoImg.attr('data-src');
+                                if (src) {
+                                    src = src.split('?')[0].split('#')[0];
+                                    mainOrgImageUrl = src.startsWith('http')
+                                        ? src
+                                        : `https://robertsspaceindustries.com${src}`;
+                                    console.log(`🖼️ Immagine org trovata nella pagina org: ${mainOrgImageUrl}`);
+                                }
+                            }
+
+                            // Se non trovata, cerca con regex nella pagina org
+                            if (!mainOrgImageUrl) {
+                                const orgImgPatterns = [
+                                    /<img[^>]*src=["']([^"']*\/media\/orgs[^"']*\.(jpg|jpeg|png|webp))["'][^>]*>/i,
+                                    /<img[^>]*src=["']([^"']*logo[^"']*\.(jpg|jpeg|png|webp))["'][^>]*>/i,
+                                    /background-image:\s*url\(["']?([^"')]*\/media\/orgs[^"')]*)["']?\)/i
+                                ];
+
+                                for (const pattern of orgImgPatterns) {
+                                    const match = orgPageHtml.match(pattern);
+                                    if (match && match[1]) {
+                                        let src = match[1].split('?')[0].split('#')[0];
+                                        mainOrgImageUrl = src.startsWith('http')
+                                            ? src
+                                            : `https://robertsspaceindustries.com${src}`;
+                                        console.log(`🖼️ Immagine org trovata (regex pagina org): ${mainOrgImageUrl}`);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (orgPageError) {
+                        console.warn(`⚠️ Errore nel recupero pagina org: ${orgPageError.message}`);
+                    }
+
+                    // Se ancora non trovata, usa URL costruito come fallback
+                    if (!mainOrgImageUrl) {
+                        // Per "Logistic Space Economy" -> "logistic-space-economy"
+                        const possibleUrls = [
+                            `https://robertsspaceindustries.com/media/orgs/${orgSlug}/logo.jpg`,
+                            `https://robertsspaceindustries.com/media/orgs/${orgSlug}/logo.png`,
+                            `https://robertsspaceindustries.com/media/orgs/${orgSlug}/banner.jpg`,
+                            `https://robertsspaceindustries.com/media/orgs/${orgSlug}/banner.png`,
+                            `https://robertsspaceindustries.com/media/orgs/${orgSlug}/org_logo.jpg`,
+                            `https://robertsspaceindustries.com/media/orgs/${orgSlug}/org_logo.png`
+                        ];
+
+                        // Usa il primo URL come fallback
+                        mainOrgImageUrl = possibleUrls[0];
+                        console.log(`🖼️ Immagine org costruita (fallback): ${mainOrgImageUrl}`);
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Errore nella costruzione URL immagine org:', error);
+                }
+            }
+        }
+
+        // Se abbiamo trovato un'organizzazione principale, aggiungila
+        if (mainOrgName) {
+            orgs.push({
+                name: mainOrgName,
+                rank: mainOrgRank || null,
+                imageUrl: mainOrgImageUrl || null
+            });
+        }
+
+        // Cerca altre organizzazioni nella pagina (se presenti)
+        // Cerca sezioni con "organization" nel testo o nelle classi
+        $('[class*="org"], [id*="org"], .organization, .org-item').each((i, elem) => {
+            const $elem = $(elem);
+            const text = $elem.text().trim();
+
+            // Se contiene "Main organization", salta (già processato)
+            if (text.toLowerCase().includes('main organization')) {
+                return;
+            }
+
+            // Cerca nomi di organizzazioni (pattern: testo con lunghezza ragionevole, non etichette)
+            const orgNameMatch = text.match(/^([A-Z][A-Za-z0-9\s&]+)$/);
+            if (orgNameMatch && orgNameMatch[1] && orgNameMatch[1].length > 3 && orgNameMatch[1].length < 100) {
+                const name = orgNameMatch[1].trim();
+                // Evita duplicati
+                if (!orgs.some(o => o.name === name)) {
+                    orgs.push({
+                        name: name,
+                        rank: null
+                    });
+                }
+            }
+        });
+
+        // Verifica se la pagina contiene il messaggio "NO ORG MEMBERSHIP FOUND"
+        const hasNoOrgMessage = html.toLowerCase().includes('no org membership found') ||
+            html.toLowerCase().includes('no organization membership') ||
+            html.toLowerCase().includes('no public records');
+
+        // Se non ci sono organizzazioni trovate o il messaggio è presente, usa un messaggio specifico
+        let orgsString = '';
+        if (orgs.length > 0) {
+            orgsString = orgs.map(org => org.name).join(', ');
+        } else {
+            // Se non ci sono org trovate, usa sempre il messaggio standard
+            orgsString = 'NO ORG MEMBERSHIP FOUND IN PUBLIC RECORDS';
+        }
+
+        // Log per debug
+        console.log(`🔍 Validazione per ${handle}:`, {
+            orgsCount: orgs.length,
+            hasNoOrgMessage: hasNoOrgMessage,
+            orgsString: orgsString,
+            mainOrgName: mainOrgName
+        });
+
+        // Verifica condizioni: solo una org e nome "Logistic Space Economy"
+        const hasOnlyOneOrg = orgs.length === 1;
+        const hasMainName = mainOrgName && mainOrgName.trim() === 'Logistic Space Economy';
+
+        // Se non ci sono organizzazioni trovate, la validazione fallisce
+        const isValid = orgs.length > 0 && hasOnlyOneOrg && hasMainName;
+
+        // Costruisci i messaggi di errore
+        const issues = [];
+        if (!isValid) {
+            // PRIORITÀ 1: Se non ci sono organizzazioni, questo è il problema principale
+            if (orgs.length === 0 || hasNoOrgMessage) {
+                issues.push('Nessuna organizzazione trovata nei registri pubblici');
+            } else {
+                // PRIORITÀ 2: Se ci sono org ma non solo una
+                if (!hasOnlyOneOrg) {
+                    issues.push(`Ha ${orgs.length} organizzazioni invece di 1`);
+                }
+                // PRIORITÀ 3: Se c'è una org ma il nome non è corretto
+                if (!hasMainName) {
+                    issues.push(`Main org nome è "${mainOrgName || 'non trovato'}" invece di "Logistic Space Economy"`);
+                }
+            }
+        }
+
+        // Assicurati che isValid sia sempre un booleano (non null/undefined)
+        const validationResult = {
+            isValid: Boolean(isValid), // Forza a booleano
+            hasOnlyOneOrg: Boolean(hasOnlyOneOrg),
+            hasMainName: Boolean(hasMainName),
+            mainOrgName: mainOrgName || null,
+            mainOrgImageUrl: mainOrgImageUrl || null,
+            issues: issues || []
+        };
+
+        console.log(`📋 Validazione finale per ${handle}:`, validationResult);
+        console.log(`🖼️ URL immagine org principale: ${mainOrgImageUrl || 'NON TROVATA'}`);
+
+        const result = {
+            success: true,
+            user_handle: handle,
+            orgs: orgs,
+            orgs_string: orgsString,
+            count: orgs.length,
+            validation: validationResult
+        };
+
+        // Salva in cache per 24 ore (86400 secondi)
+        await cache.set(`rsi:orgs:${handle.toLowerCase()}`, result, 86400);
+
+        return res.json(result);
+
+    } catch (error) {
+        console.error('Errore nel recupero org RSI:', error);
+        // Anche in caso di errore, restituisci una validazione fallita
+        const errorMessage = error.message || 'Errore interno del server';
+        const isNotFound = errorMessage.toLowerCase().includes('not found') ||
+            errorMessage.toLowerCase().includes('404') ||
+            error.code === 'ENOTFOUND' ||
+            error.status === 404;
+        const orgsString = isNotFound ? '404' : 'NO ORG MEMBERSHIP FOUND IN PUBLIC RECORDS';
+        const issueMessage = isNotFound ? 'Errore nel recupero dati: Not Found' : `Errore nel recupero dati: ${errorMessage}`;
+
+        return res.status(500).json({
+            success: true,
+            error: errorMessage,
+            user_handle: req.params.handle,
+            orgs: [],
+            orgs_string: orgsString,
+            count: 0,
+            validation: {
+                isValid: false,
+                hasOnlyOneOrg: false,
+                hasMainName: false,
+                mainOrgName: null,
+                issues: [issueMessage]
+            }
+        });
+    }
+});
+
+// Endpoint health check
+app.get('/api/v1/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        message: 'RSI API Proxy server is running',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// ==================== ENDPOINT EVENTI ====================
+// Compatibili per integrazione con bot Discord
+
+/**
+ * Helper function per inviare notifiche Discord via webhook
+ * @param {Object} event - L'evento da notificare
+ * @param {String} action - 'created', 'updated', 'deleted'
+ */
+async function notifyDiscordWebhook(event, action) {
+    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+    if (!webhookUrl) {
+        return; // Nessun webhook configurato, ignora silenziosamente
+    }
+
+    try {
+        const actionMessages = {
+            'created': '📅 Nuovo evento creato',
+            'updated': '✏️ Evento modificato',
+            'deleted': '🗑️ Evento eliminato'
+        };
+
+        const colors = {
+            'created': 0x00ff00, // Verde
+            'updated': 0x0099ff, // Blu
+            'deleted': 0xff0000  // Rosso
+        };
+
+        const eventDate = new Date(event.date);
+        const embed = {
+            title: actionMessages[action] || 'Evento aggiornato',
+            description: `**${event.title}**`,
+            color: colors[action] || 0x0099ff,
+            fields: [
+                {
+                    name: '📆 Data',
+                    value: eventDate.toLocaleDateString('it-IT', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    }),
+                    inline: true
+                },
+                {
+                    name: '🏷️ Tipo',
+                    value: event.type || 'evento',
+                    inline: true
+                }
+            ],
+            timestamp: new Date().toISOString()
+        };
+
+        if (event.startTime || event.endTime) {
+            embed.fields.push({
+                name: '⏰ Orario',
+                value: `${event.startTime || ''}${event.startTime && event.endTime ? ' - ' : ''}${event.endTime || ''}`,
+                inline: true
+            });
+        }
+
+        if (event.location) {
+            embed.fields.push({
+                name: '📍 Location',
+                value: event.location,
+                inline: false
+            });
+        }
+
+        if (event.description) {
+            embed.fields.push({
+                name: '📝 Descrizione',
+                value: event.description.substring(0, 1024), // Limite Discord
+                inline: false
+            });
+        }
+
+        await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                embeds: [embed]
+            }),
+            timeout: 10000 // 10 secondi timeout
+        });
+    } catch (error) {
+        console.error('❌ Errore nell\'invio webhook Discord:', error);
+        // Non bloccare l'operazione se il webhook fallisce
+    }
+}
+
+// GET /api/events - Ottieni tutti gli eventi (con filtri opzionali per bot Discord)
+app.get('/api/v1/events', checkMongoConnection, async (req, res) => {
+    try {
+        const { 
+            upcoming,      // Solo eventi futuri
+            type,          // Filtra per tipo
+            from,          // Data inizio (YYYY-MM-DD)
+            to,            // Data fine (YYYY-MM-DD)
+            limit          // Limita il numero di risultati
+        } = req.query;
+
+        let query = {};
+
+        // Filtro per eventi futuri
+        if (upcoming === 'true') {
+            query.date = { $gte: new Date() };
+        }
+
+        // Filtro per tipo
+        if (type) {
+            query.type = type;
+        }
+
+        // Filtro per range di date
+        if (from || to) {
+            query.date = query.date || {};
+            if (from) {
+                query.date.$gte = new Date(from);
+            }
+            if (to) {
+                query.date.$lte = new Date(to);
+            }
+        }
+
+        let queryBuilder = Event.find(query).sort({ date: 1 });
+
+        // Limita i risultati se richiesto
+        if (limit) {
+            queryBuilder = queryBuilder.limit(parseInt(limit));
+        }
+
+        const events = await queryBuilder.lean();
+        
+        res.json({
+            success: true,
+            count: events.length,
+            events: events
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero eventi:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nel recupero eventi' 
+        });
+    }
+});
+
+// GET /api/events/:id - Ottieni un singolo evento (utile per bot Discord)
+app.get('/api/v1/events/:id', checkMongoConnection, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Verifica che l'ID sia valido per MongoDB
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+
+        const event = await Event.findById(id).lean();
+
+        if (!event) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Evento non trovato' 
+            });
+        }
+
+        res.json({
+            success: true,
+            event: event
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero evento:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nel recupero evento' 
+        });
+    }
+});
+
+// POST /api/events - Crea un nuovo evento (compatibile con bot Discord)
+app.post('/api/v1/events', checkMongoConnection, async (req, res) => {
+    try {
+        const { title, description, date, startTime, endTime, location, type, createdBy, notifyDiscord } = req.body;
+
+        // Validazione
+        if (!title || !date) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Titolo e data sono obbligatori' 
+            });
+        }
+
+        // Crea nuovo evento
+        // Gestisci la data evitando problemi di fuso orario
+        // Se la data è in formato YYYY-MM-DD, crea la data usando i componenti
+        let eventDate;
+        if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            // Formato YYYY-MM-DD: crea data locale a mezzanotte
+            const [year, month, day] = date.split('-').map(Number);
+            eventDate = new Date(year, month - 1, day);
+        } else {
+            eventDate = new Date(date);
+        }
+
+        const event = new Event({
+            title,
+            description: description || '',
+            date: eventDate,
+            startTime: startTime || '',
+            endTime: endTime || '',
+            location: location || '',
+            type: type || 'evento',
+            createdBy: createdBy || 'system'
+        });
+
+        const savedEvent = await event.save();
+
+        // Notifica Discord se richiesto (default: true)
+        if (notifyDiscord !== false) {
+            await notifyDiscordWebhook(savedEvent.toObject(), 'created');
+        }
+
+        res.status(201).json({
+            success: true,
+            event: savedEvent
+        });
+    } catch (error) {
+        console.error('❌ Errore nella creazione evento:', error);
+        // Se è un errore di validazione Mongoose, fornisci dettagli
+        if (error.name === 'ValidationError') {
+            const errors = Object.values(error.errors).map(e => e.message).join(', ');
+            return res.status(400).json({ 
+                success: false,
+                error: `Errore di validazione: ${errors}` 
+            });
+        }
+        res.status(500).json({ 
+            success: false,
+            error: error.message || 'Errore nella creazione evento' 
+        });
+    }
+});
+
+// PUT /api/events/:id - Modifica un evento esistente (compatibile con bot Discord)
+app.put('/api/v1/events/:id', checkMongoConnection, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, description, date, startTime, endTime, location, type, notifyDiscord } = req.body;
+
+        console.log(`📝 Tentativo di modifica evento con ID: ${id}`);
+
+        // Validazione
+        if (!title || !date) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Titolo e data sono obbligatori' 
+            });
+        }
+
+        // Verifica che l'ID sia valido per MongoDB
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            console.error(`❌ ID non valido: ${id}`);
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+
+        // Aggiorna evento
+        // Gestisci la data evitando problemi di fuso orario
+        let eventDate;
+        if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            // Formato YYYY-MM-DD: crea data locale a mezzanotte
+            const [year, month, day] = date.split('-').map(Number);
+            eventDate = new Date(year, month - 1, day);
+        } else {
+            eventDate = new Date(date);
+        }
+
+        const event = await Event.findByIdAndUpdate(
+            id,
+            {
+                title,
+                description: description || '',
+                date: eventDate,
+                startTime: startTime || '',
+                endTime: endTime || '',
+                location: location || '',
+                type: type || 'evento',
+                updatedAt: new Date()
+            },
+            { new: true, runValidators: true }
+        );
+
+        if (!event) {
+            console.error(`❌ Evento con ID ${id} non trovato nel database`);
+            return res.status(404).json({ 
+                success: false,
+                error: 'Evento non trovato' 
+            });
+        }
+
+        // Notifica Discord se richiesto (default: true)
+        if (notifyDiscord !== false) {
+            await notifyDiscordWebhook(event.toObject(), 'updated');
+        }
+
+        console.log(`✅ Evento ${id} modificato con successo`);
+        res.json({
+            success: true,
+            event: event
+        });
+    } catch (error) {
+        console.error('❌ Errore nella modifica evento:', error);
+        if (error.name === 'CastError') {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nella modifica evento' 
+        });
+    }
+});
+
+// DELETE /api/events/:id - Elimina un evento (compatibile con bot Discord)
+app.delete('/api/v1/events/:id', checkMongoConnection, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { notifyDiscord } = req.query; // Per DELETE, usa query params
+
+        // Verifica che l'ID sia valido per MongoDB
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+
+        // Recupera l'evento prima di eliminarlo per la notifica
+        const eventToDelete = await Event.findById(id).lean();
+
+        if (!eventToDelete) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Evento non trovato' 
+            });
+        }
+
+        // Elimina l'evento
+        await Event.findByIdAndDelete(id);
+
+        // Notifica Discord se richiesto (default: true)
+        if (notifyDiscord !== 'false') {
+            await notifyDiscordWebhook(eventToDelete, 'deleted');
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Evento eliminato con successo' 
+        });
+    } catch (error) {
+        console.error('❌ Errore nell\'eliminazione evento:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nell\'eliminazione evento' 
+        });
+    }
+});
+
+// ==================== API DI SINCRONIZZAZIONE PER BOT DISCORD ====================
+
+// GET /api/sync/members - Sincronizza membri (bot -> web app e viceversa)
+app.get('/api/v1/sync/members', checkMongoConnection, authenticateAPI, async (req, res) => {
+    try {
+        const { 
+            since,      // Timestamp per sincronizzazione incrementale (ISO string o timestamp)
+            tag,        // Filtra per tag specifico
+            limit       // Limita risultati
+        } = req.query;
+
+        let query = {};
+
+        // Filtro per sincronizzazione incrementale
+        if (since) {
+            const sinceDate = new Date(since);
+            query.updatedAt = { $gte: sinceDate };
+        }
+
+        // Filtro per tag
+        if (tag) {
+            query.tag = tag;
+        }
+
+        let queryBuilder = Member.find(query).sort({ updatedAt: -1 });
+
+        if (limit) {
+            queryBuilder = queryBuilder.limit(parseInt(limit));
+        }
+
+        const members = await queryBuilder.lean();
+
+        res.json({
+            success: true,
+            count: members.length,
+            timestamp: new Date().toISOString(),
+            members: members.map(m => ({
+                key: m.key,
+                name: m.name,
+                id: m.id,
+                tag: m.tag,
+                index: m.index,
+                date: m.date,
+                idoneita: m.idoneita,
+                watchdog: m.watchdog,
+                promoted: m.promoted,
+                affiliazioniOrg: m.affiliazioniOrg,
+                orgValidation: m.orgValidation,
+                note: m.note,
+                createdAt: m.createdAt,
+                updatedAt: m.updatedAt
+            }))
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione membri:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione membri'
+        });
+    }
+});
+
+// POST /api/sync/members - Sincronizza membri dal bot (bulk update)
+app.post('/api/v1/sync/members', checkMongoConnection, authenticateAPI, async (req, res) => {
+    try {
+        const { members, syncMode = 'merge' } = req.body; // syncMode: 'merge' o 'replace'
+
+        if (!Array.isArray(members) || members.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di membri richiesto'
+            });
+        }
+
+        const operations = members.map(member => ({
+            updateOne: {
+                filter: { key: member.key },
+                update: {
+                    $set: {
+                        ...member,
+                        updatedAt: new Date()
+                    }
+                },
+                upsert: true
+            }
+        }));
+
+        const result = await Member.bulkWrite(operations);
+
+        console.log(`🔄 Sincronizzazione membri completata: ${result.upsertedCount} inseriti, ${result.modifiedCount} aggiornati`);
+
+        res.json({
+            success: true,
+            message: 'Sincronizzazione completata',
+            inserted: result.upsertedCount,
+            updated: result.modifiedCount,
+            total: members.length
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione membri:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione membri'
+        });
+    }
+});
+
+// GET /api/sync/events - Sincronizza eventi (bot -> web app e viceversa)
+app.get('/api/v1/sync/events', checkMongoConnection, authenticateAPI, async (req, res) => {
+    try {
+        const { 
+            since,      // Timestamp per sincronizzazione incrementale
+            upcoming,   // Solo eventi futuri
+            type,       // Filtra per tipo
+            limit       // Limita risultati
+        } = req.query;
+
+        let query = {};
+
+        if (since) {
+            const sinceDate = new Date(since);
+            query.updatedAt = { $gte: sinceDate };
+        }
+
+        if (upcoming === 'true') {
+            query.date = { ...query.date, $gte: new Date() };
+        }
+
+        if (type) {
+            query.type = type;
+        }
+
+        let queryBuilder = Event.find(query).sort({ date: 1 });
+
+        if (limit) {
+            queryBuilder = queryBuilder.limit(parseInt(limit));
+        }
+
+        const events = await queryBuilder.lean();
+
+        res.json({
+            success: true,
+            count: events.length,
+            timestamp: new Date().toISOString(),
+            events: events
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione eventi:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione eventi'
+        });
+    }
+});
+
+// POST /api/sync/events - Sincronizza eventi dal bot (bulk update)
+app.post('/api/v1/sync/events', checkMongoConnection, authenticateAPI, async (req, res) => {
+    try {
+        const { events } = req.body;
+
+        if (!Array.isArray(events) || events.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di eventi richiesto'
+            });
+        }
+
+        const operations = events.map(event => ({
+            updateOne: {
+                filter: { _id: event._id || event.id },
+                update: {
+                    $set: {
+                        title: event.title,
+                        description: event.description || '',
+                        date: new Date(event.date),
+                        startTime: event.startTime || '',
+                        endTime: event.endTime || '',
+                        location: event.location || '',
+                        type: event.type || 'evento',
+                        updatedAt: new Date()
+                    }
+                },
+                upsert: false // Non creare nuovi eventi, solo aggiorna esistenti
+            }
+        }));
+
+        const result = await Event.bulkWrite(operations);
+
+        console.log(`🔄 Sincronizzazione eventi completata: ${result.modifiedCount} aggiornati`);
+
+        res.json({
+            success: true,
+            message: 'Sincronizzazione completata',
+            updated: result.modifiedCount,
+            total: events.length
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione eventi:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione eventi'
+        });
+    }
+});
+
+// POST /api/import/bot-events - Importa eventi dal formato del bot Discord (da CSV/JSON)
+// Nota: Non richiede autenticazione per permettere importazioni da script automatizzati
+app.post('/api/v1/import/bot-events', checkMongoConnection, async (req, res) => {
+    try {
+        const { activities } = req.body; // Array di attività dal bot
+
+        if (!Array.isArray(activities) || activities.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di attività richiesto'
+            });
+        }
+
+        const imported = [];
+        const errors = [];
+
+        for (const activity of activities) {
+            try {
+                // Converti il formato del bot al formato del sistema
+                let scheduledTime = activity.scheduled_start_time_iso || activity.datetime_input;
+                if (!scheduledTime) {
+                    errors.push({
+                        activity: activity.id || activity.title,
+                        error: 'Data non trovata'
+                    });
+                    continue;
+                }
+
+                // Se la data è nel formato "DD/MM/YYYY HH:mm", convertila in ISO
+                if (typeof scheduledTime === 'string' && scheduledTime.match(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/)) {
+                    // Formato: "14/11/2025 21:15"
+                    const [datePart, timePart] = scheduledTime.split(' ');
+                    const [day, month, year] = datePart.split('/').map(Number);
+                    const [hours, minutes] = timePart.split(':').map(Number);
+                    // Crea data in formato ISO (UTC)
+                    scheduledTime = new Date(Date.UTC(year, month - 1, day, hours, minutes)).toISOString();
+                }
+
+                // Parsa la data ISO
+                const eventDate = new Date(scheduledTime);
+                if (isNaN(eventDate.getTime())) {
+                    errors.push({
+                        activity: activity.id || activity.title,
+                        error: 'Data non valida'
+                    });
+                    continue;
+                }
+
+                // Estrai ora e minuti dalla data ISO
+                const hours = eventDate.getHours().toString().padStart(2, '0');
+                const minutes = eventDate.getMinutes().toString().padStart(2, '0');
+                const startTime = `${hours}:${minutes}`;
+
+                // Determina il tipo di evento dal config_json o dal titolo
+                let eventType = 'evento';
+                try {
+                    if (activity.config_json) {
+                        const config = typeof activity.config_json === 'string' 
+                            ? JSON.parse(activity.config_json) 
+                            : activity.config_json;
+                        if (config.type === 'activity') {
+                            eventType = 'attività';
+                        }
+                    }
+                } catch (e) {
+                    // Ignora errori di parsing del config
+                }
+
+                // Cerca se esiste già un evento con lo stesso titolo e data
+                const existingEvent = await Event.findOne({
+                    title: activity.title,
+                    date: {
+                        $gte: new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate()),
+                        $lt: new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate() + 1)
+                    }
+                });
+
+                if (existingEvent) {
+                    // Aggiorna l'evento esistente
+                    existingEvent.description = activity.description || existingEvent.description;
+                    existingEvent.location = activity.location || existingEvent.location;
+                    existingEvent.startTime = startTime;
+                    existingEvent.type = eventType;
+                    await existingEvent.save();
+                    imported.push({ id: existingEvent._id, action: 'updated', title: activity.title });
+                } else {
+                    // Crea un nuovo evento
+                    const newEvent = new Event({
+                        title: activity.title,
+                        description: activity.description || '',
+                        date: eventDate,
+                        startTime: startTime,
+                        endTime: '',
+                        location: activity.location || '',
+                        type: eventType,
+                        createdBy: activity.creator_id || 'discord-bot'
+                    });
+                    const savedEvent = await newEvent.save();
+                    imported.push({ id: savedEvent._id, action: 'created', title: activity.title });
+                }
+            } catch (error) {
+                console.error(`❌ Errore nell'importazione attività ${activity.id || activity.title}:`, error);
+                errors.push({
+                    activity: activity.id || activity.title,
+                    error: error.message
+                });
+            }
+        }
+
+        console.log(`📥 Importazione eventi completata: ${imported.length} importati, ${errors.length} errori`);
+
+        res.json({
+            success: true,
+            message: `Importazione completata: ${imported.length} eventi importati`,
+            imported: imported.length,
+            errors: errors.length,
+            details: {
+                imported,
+                errors: errors.length > 0 ? errors : undefined
+            }
+        });
+    } catch (error) {
+        console.error('❌ Errore nell\'importazione eventi:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Errore nell\'importazione eventi'
+        });
+    }
+});
+
+// GET /api/discord/avatar/:userId - Ottiene l'avatar Discord di un utente
+app.get('/api/v1/discord/avatar/:userId', checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const discordBotToken = process.env.DISCORD_BOT_TOKEN;
+
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID richiesto'
+            });
+        }
+
+        if (!discordBotToken) {
+            // Se non c'è il bot token, restituisci l'avatar di default
+            const defaultAvatarIndex = parseInt(userId) % 6;
+            return res.json({
+                success: true,
+                avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+                isDefault: true
+            });
+        }
+
+        // Chiama l'API Discord usando il bot token (sul server non ci sono problemi di CORS)
+        const response = await fetch(`https://discord.com/api/v10/users/${userId}`, {
+            headers: {
+                'Authorization': `Bot ${discordBotToken}`,
+            },
+            timeout: 10000 // 10 secondi timeout
+        });
+
+        if (!response.ok) {
+            // Se l'utente non esiste o errore, restituisci l'avatar di default
+            const defaultAvatarIndex = parseInt(userId) % 6;
+            return res.json({
+                success: true,
+                avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+                isDefault: true
+            });
+        }
+
+        const userData = await response.json();
+        
+        if (userData.avatar) {
+            const avatarHash = userData.avatar;
+            const isAnimated = avatarHash.startsWith('a_');
+            const extension = isAnimated ? 'gif' : 'png';
+            const avatarUrl = `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${extension}?size=128`;
+            
+            return res.json({
+                success: true,
+                avatarUrl: avatarUrl,
+                isDefault: false
+            });
+        }
+
+        // Se non ha avatar personalizzato, usa l'avatar di default
+        const defaultAvatarIndex = (parseInt(userId) >> 22) % 6;
+        return res.json({
+            success: true,
+            avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+            isDefault: true
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero avatar Discord:', error);
+        // In caso di errore, restituisci l'avatar di default
+        const defaultAvatarIndex = parseInt(req.params.userId || '0') % 6;
+        return res.json({
+            success: true,
+            avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+            isDefault: true
+        });
+    }
+});
+
+// GET /api/sync/test - Test connessione e autenticazione
+app.get('/api/v1/sync/test', authenticateAPI, (req, res) => {
+    res.json({
+        success: true,
+        message: 'Autenticazione valida',
+        authType: req.authType,
+        isBot: req.bot || false,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// GET /api/sync/status - Stato della sincronizzazione
+app.get('/api/v1/sync/status', checkMongoConnection, authenticateAPI, async (req, res) => {
+    try {
+        const [membersCount, eventsCount, lastMemberUpdate, lastEventUpdate] = await Promise.all([
+            Member.countDocuments(),
+            Event.countDocuments(),
+            Member.findOne().sort({ updatedAt: -1 }).select('updatedAt').lean(),
+            Event.findOne().sort({ updatedAt: -1 }).select('updatedAt').lean()
+        ]);
+
+        res.json({
+            success: true,
+            status: {
+                members: {
+                    total: membersCount,
+                    lastUpdate: lastMemberUpdate?.updatedAt || null
+                },
+                events: {
+                    total: eventsCount,
+                    lastUpdate: lastEventUpdate?.updatedAt || null
+                },
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero stato sincronizzazione:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nel recupero stato'
+        });
+    }
+});
+
+// ========================= ROUTES MODULES =========================
+// Monta i moduli di route per una migliore organizzazione del codice
+app.use('/api/v1', memberRoutes);
+
+app.listen(PORT, async () => {
+    // Inizializza Redis per caching
+    await cache.initRedis();
+
+    console.log(`RSI API Proxy server running on http://localhost:${PORT}`);
+    console.log(`📋 Endpoint ripristino membri: POST /api/deleted-members/:key/restore`);
+    console.log(`\n👤 Endpoint Avatar Discord:`);
+    console.log(`   GET    /api/discord/avatar/:userId - Ottiene l'avatar Discord di un utente`);
+    console.log(`\n📅 Endpoint Eventi (compatibili con bot Discord):`);
+    console.log(`   GET    /api/events - Lista eventi (filtri: upcoming, type, from, to, limit)`);
+    console.log(`   POST   /api/import/bot-events - Importa eventi dal formato bot Discord (CSV/JSON)`);
+    console.log(`   GET    /api/events/:id - Dettagli evento`);
+    console.log(`   POST   /api/events - Crea evento (notifyDiscord: true/false)`);
+    console.log(`   PUT    /api/events/:id - Modifica evento (notifyDiscord: true/false)`);
+    console.log(`   DELETE /api/events/:id - Elimina evento (?notifyDiscord=false)`);
+    console.log(`\n🔄 API di Sincronizzazione per Bot Discord:`);
+    console.log(`   GET    /api/sync/test - Test autenticazione`);
+    console.log(`   GET    /api/sync/members - Ottieni membri (filtri: since, tag, limit)`);
+    console.log(`   POST   /api/sync/members - Sincronizza membri (bulk)`);
+    console.log(`   GET    /api/sync/events - Ottieni eventi (filtri: since, upcoming, type, limit)`);
+    console.log(`   POST   /api/sync/events - Sincronizza eventi (bulk)`);
+    console.log(`   GET    /api/sync/status - Stato sincronizzazione`);
+    console.log(`\n🔐 Autenticazione API:`);
+    console.log(`   Header: X-API-Key: <api-key> oppure Authorization: ApiKey <api-key>`);
+    console.log(`   Oppure: Authorization: Bearer <jwt-token> (per utenti web)`);
+    if (process.env.DISCORD_WEBHOOK_URL) {
+        console.log(`   ✅ Webhook Discord configurato`);
+    } else {
+        console.log(`   ⚠️  Webhook Discord non configurato (DISCORD_WEBHOOK_URL)`);
+    }
+    if (process.env.DISCORD_BOT_TOKEN) {
+        console.log(`   ✅ Discord Bot Token configurato (per avatar)`);
+    } else {
+        console.log(`   ⚠️  Discord Bot Token non configurato (DISCORD_BOT_TOKEN)`);
+    }
+    if (API_KEY) {
+        console.log(`   ✅ API Key configurata`);
+    } else {
+        console.log(`   ⚠️  API Key non configurata (API_KEY o DISCORD_BOT_API_KEY)`);
+    }
+});
+
