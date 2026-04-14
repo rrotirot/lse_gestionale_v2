@@ -156,6 +156,33 @@ export function useMemberDetail(selectedMember, onMemberUpdate, deleteMemberFunc
         setEditedNote(newNote);
     }, []);
 
+    // Slider richiami (0..3, step 0.5)
+    const handleRichiamiChange = useCallback(async (newValue) => {
+        if (!selectedMember) return;
+        const n = Number(newValue);
+        const safe = Number.isFinite(n) ? Math.max(0, Math.min(3, n)) : 0;
+
+        // Regola: da 1 richiamo in su -> automaticamente "da tenere d'occhio"
+        const shouldBeWatchdog = safe >= 1;
+
+        const updatedMember = {
+            ...selectedMember,
+            richiami: safe,
+            watchdog: shouldBeWatchdog ? true : selectedMember.watchdog,
+            // Se watchdog viene attivato automaticamente, idoneità va disattivata per coerenza UI/regole esistenti
+            idoneita: shouldBeWatchdog ? false : selectedMember.idoneita,
+            orgValidation: selectedMember.orgValidation || null
+        };
+
+        try {
+            await membersService.updateMember(selectedMember.key, updatedMember);
+            onMemberUpdate(updatedMember);
+        } catch (error) {
+            console.error('❌ Errore nell\'aggiornamento richiami:', error);
+            throw error;
+        }
+    }, [selectedMember, onMemberUpdate]);
+
     // Funzione per validare il membro
     const validateMember = useCallback(async () => {
         if (!selectedMember) return;
@@ -266,6 +293,7 @@ export function useMemberDetail(selectedMember, onMemberUpdate, deleteMemberFunc
         handleDaTenereDOcchioToggle,
         handleNoteInputChange,
         handleNoteSave,
+        handleRichiamiChange,
         saveNameToDatabase,
         validateMember,
         resetValidation,

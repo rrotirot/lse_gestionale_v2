@@ -2410,6 +2410,16 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
             delete updateData.daTenereDOcchio;
         }
 
+        // Regola business: da 1 richiamo in su -> automaticamente "da tenere d'occhio"
+        // (non forziamo l'operazione inversa: se scende sotto 1, lasciamo lo stato com'è)
+        if (updateData.richiami !== undefined) {
+            const r = Number(updateData.richiami);
+            if (Number.isFinite(r) && r >= 1) {
+                updateData.watchdog = true;
+                updateData.idoneita = false;
+            }
+        }
+
         // Log per verificare che orgValidation venga salvata
         if (updateData.orgValidation) {
             console.log(`💾 Salvataggio validazione per membro key=${key}:`, {

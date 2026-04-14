@@ -23,6 +23,7 @@ export default function MemberDetailModal({
         handleDaTenereDOcchioToggle,
         handleNoteInputChange,
         handleNoteSave,
+        handleRichiamiChange,
         validateMember,
         resetValidation,
         deleteMember,
@@ -90,8 +91,16 @@ export default function MemberDetailModal({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="!inset-0 !translate-x-0 !translate-y-0 w-screen max-w-none h-screen max-h-none overflow-hidden border-0 bg-transparent p-4 sm:p-6 rounded-none">
-                <div className="w-full max-w-[1100px] mx-auto h-full flex flex-col ui-float bg-[#0b0f18]/90 border border-white/10 rounded-xl overflow-hidden">
+            <DialogContent className="!inset-0 !left-0 !top-0 !translate-x-0 !translate-y-0 !w-screen !max-w-none !h-screen !max-h-none !p-0 !flex !flex-col !gap-0 overflow-hidden border-0 bg-transparent rounded-none">
+                <div className="relative w-full max-w-[1100px] mx-auto h-full flex flex-col ui-float bg-[#0b0f18]/90 border border-white/10 rounded-xl overflow-hidden my-3 sm:my-4">
+                    <button
+                        onClick={() => onOpenChange(false)}
+                        className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white transition"
+                        aria-label="Chiudi dettagli membro"
+                        title="Chiudi"
+                    >
+                        <span className="text-xl leading-none">×</span>
+                    </button>
                     <div className="px-4 sm:px-6 py-4 sm:py-5">
                         <DialogHeader>
                             <DialogTitle>Dettagli membro: {member.name}</DialogTitle>
@@ -103,7 +112,7 @@ export default function MemberDetailModal({
                     {/* Fade gradients (stacco scroll) */}
                     <div
                         aria-hidden="true"
-                        className="pointer-events-none sticky top-0 z-20 h-7 -mt-1 bg-gradient-to-b from-[rgba(10,12,18,0.72)] via-[rgba(10,12,18,0.35)] to-transparent backdrop-blur-[2px]"
+                        className="pointer-events-none sticky top-0 z-20 h-5 -mt-1 bg-gradient-to-b from-[rgba(10,12,18,0.60)] via-[rgba(10,12,18,0.25)] to-transparent backdrop-blur-[2px]"
                     />
                     <div className="space-y-4">
                     {/* Header con avatar e info base */}
@@ -282,6 +291,34 @@ export default function MemberDetailModal({
                                 </p>
                             )}
                         </div>
+                        </div>
+                    </div>
+
+                    {/* Richiami */}
+                    <div className="ui-float p-4">
+                        <div className="flex items-center justify-between gap-3 mb-3">
+                            <div className="text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300/80">
+                                Richiami
+                            </div>
+                            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                                {Number.isFinite(Number(member.richiami)) ? Number(member.richiami).toFixed(1).replace('.0', '') : '0'}
+                                <span className="text-xs font-normal text-gray-500 dark:text-gray-400"> / 3</span>
+                            </div>
+                        </div>
+                        <input
+                            type="range"
+                            min={0}
+                            max={3}
+                            step={0.5}
+                            value={Number.isFinite(Number(member.richiami)) ? Number(member.richiami) : 0}
+                            onChange={(e) => handleRichiamiChange(e.target.value)}
+                            className="w-full accent-amber-500"
+                        />
+                        <div className="mt-2 flex justify-between text-[11px] text-gray-500 dark:text-gray-400">
+                            <span>0</span>
+                            <span>1</span>
+                            <span>2</span>
+                            <span>3</span>
                         </div>
                     </div>
 
@@ -580,16 +617,16 @@ export default function MemberDetailModal({
                     </div>
 
                         {/* Spazio per footer sticky */}
-                        <div className="h-2" />
+                        <div className="h-0" />
                     </div>
                     <div
                         aria-hidden="true"
-                        className="pointer-events-none sticky bottom-0 z-20 h-12 bg-gradient-to-t from-[rgba(10,12,18,0.78)] via-[rgba(10,12,18,0.38)] to-transparent backdrop-blur-[2px]"
+                        className="pointer-events-none sticky bottom-0 z-20 h-8 bg-gradient-to-t from-[rgba(10,12,18,0.65)] via-[rgba(10,12,18,0.28)] to-transparent backdrop-blur-[2px]"
                     />
                 </div>
 
                 {/* Footer sticky (semi-trasparente per effetto meno "staccato") */}
-                <div className="relative pt-3 ui-float--subtle flex flex-wrap gap-2 items-center px-4 sm:px-6 pb-4 sm:pb-5 overflow-hidden">
+                <div className="relative pt-2 ui-float--subtle flex flex-wrap gap-2 items-center px-4 sm:px-6 pb-3 overflow-hidden">
                     {/* soft separator instead of hard border */}
                     <div
                         aria-hidden="true"

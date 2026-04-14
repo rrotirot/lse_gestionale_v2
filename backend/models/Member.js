@@ -58,6 +58,11 @@ const memberSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    richiami: {
+        // Numero richiami: 0..3 con step 0.5
+        type: Number,
+        default: 0
+    },
     createdAt: {
         type: Date,
         default: Date.now
