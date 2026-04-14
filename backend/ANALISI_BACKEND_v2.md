@@ -80,7 +80,6 @@ Autenticazione e middleware:
 
 ## Miglioramenti a medio termine
 - Considerare protezioni antibrute-force avanzate per login
-- Valutare deployment con Docker + `docker-compose` (incluso MongoDB per dev)
 - Rotazione delle API keys e gestione segreti con Vault/Secrets Manager in produzione
 - Implementare API versioning (es. `/api/v1/`)
 - Aggiungere API documentation (Swagger/OpenAPI)
@@ -130,12 +129,6 @@ Autenticazione e middleware:
 **Risultato Fase 3**: Test framework integrato, smoke test funzionante, CI/CD pipeline con GitHub Actions ✅
 
 ### Fase 4: Deployment e Secrets Management (2-3 settimane) ✅ **COMPLETATA**
-- [x] **Task 4.1**: Aggiungere `Dockerfile` e `docker-compose.yml` per backend ✅
-  - Dockerfile: Node 20+, installa dipendenze, espone porta 5000
-  - docker-compose: backend + MongoDB (per dev/test)
-  - File creati in questa sessione: `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.docker.example` ✅
-  - Impatto: deployment replicabile e consistente
-  
 - [x] **Task 4.2**: Aggiornare `.env.example` e aggiungere validazione env in avvio ✅
   - Aggiunto `validateRequiredEnv()` in `server.js` che fa fail-fast in `NODE_ENV=production`
   - Creato `backend/.env.production.example` con variabili consigliate per la produzione ✅
@@ -146,35 +139,17 @@ Autenticazione e middleware:
   - Workflow CI aggiornato per usare `secrets.JWT_SECRET` e `secrets.API_KEY`
   - Impatto: CI/CD sicuro, no segreti nel repo
   
-- [x] **Task 4.4**: Aggiungere script npm per build/container ✅
-  - Aggiunti 6 script in `package.json`: `docker:build`, `docker:up`, `docker:down`, `docker:logs`, `docker:test`, `docker:clean`
-  - Impatto: operazioni Docker semplificate per sviluppatori
-  
-- [x] **Task 4.5**: Eseguire smoke test dentro il container ✅
-  - Test eseguito con successo (2/2 passed) dentro il container
-  - Logs salvati in `backend/backend-container-logs.txt`
-  - Impatto: validazione runtime environment in container
-  
-- [x] **Bonus — CI/CD**: Workflow GitHub Actions completo ✅
-  - Build + push automatico su GHCR (GitHub Container Registry)
-  - Test di integrazione in container
-  - Upload logs artifact in caso di fallimento
-  - Tags: `:latest` e `:<commit-sha>`
-  - Impatto: deploy automatico a ogni push su `backend/**`
-  
-- [x] **Bonus — Deployment Guide**: `README.DEPLOY.md` ✅
-  - Istruzioni complete: local dev, staging CI/CD, production Docker/K8s
-  - Troubleshooting e best practices
-  - Comandi di aggiornamento e rollback
+- [x] **Task 4.4**: Aggiungere script npm per build/avvio ✅
+  - Script di build/avvio standard
 
-**Risultato Fase 4**: Backend containerizzato, CI/CD con GHCR push, documentazione deployment completa, script npm per operazioni Docker ✅
+**Risultato Fase 4**: Hardening + configurazione env + documentazione base ✅
 
 ### Fase 5: Miglioramenti avanzati (medio termine) 🔄 **QUASI COMPLETATA**
 
 ### Fase 5: Miglioramenti avanzati (medio termine) 🔄 **QUASI COMPLETATA**
 - [x] **Task 5.1**: Aggiungere Redis cache per RSI org queries ✅
   - Creato `backend/lib/cache.js` con client Redis e graceful fallback
-  - Integrato Redis nel `docker-compose.yml` (redis:7-alpine)
+  - Redis supportato via `REDIS_URL` (opzionale; fallback se non configurato)
   - Cache su endpoint `GET /api/rsi/orgs/:handle` (TTL: 24h)
   - Aggiunto `redis` package.json e `REDIS_URL` env var
   - Impatto: riduce carico RSI scraper, migliora response time
@@ -221,5 +196,5 @@ Autenticazione e middleware:
 - ✅ **Settimana 1 (COMPLETATA)**: Fase 1 (hardening quick wins)
 - ✅ **Settimana 2 (COMPLETATA)**: Fase 2 (logging strutturato)
 - ✅ **Settimane 3 (COMPLETATA)**: Fase 3 (test + CI/CD)
-- ✅ **Settimana 4 (COMPLETATA)**: Fase 4 (Docker + CI/CD con GHCR + deployment guide)
+- ✅ **Settimana 4 (COMPLETATA)**: Fase 4 (secrets + deployment guide)
 - 🔄 **Fase 5 (IN CORSO)**: Miglioramenti avanzati (Redis cache ✅, versioning API ✅, Swagger ✅, backup 🔄, monitoring 🔄)

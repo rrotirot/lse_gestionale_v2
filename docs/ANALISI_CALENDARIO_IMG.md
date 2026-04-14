@@ -96,7 +96,7 @@
 
 ### Riduzione Totale Stimata: 25-35% altezza calendario
 
-- Padding container: -15-20%
+- Padding contenitore: -15-20%
 - Header: -10-15%
 - Gap celle: -5-10%
 - Dimensioni celle: -10-15%

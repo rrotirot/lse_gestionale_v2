@@ -38,7 +38,7 @@ async function testBotLogic() {
     console.log('\n🔧 Per abilitare il bot:');
     console.log('   1. Ottieni un bot token da https://discord.com/developers/applications');
     console.log('   2. Aggiungi DISCORD_BOT_TOKEN e DISCORD_GUILD_ID alle variabili ambiente');
-    console.log('   3. Riavvia il container');
+    console.log('   3. Riavvia il processo/server');
 }
 
 testBotLogic().catch(console.error);

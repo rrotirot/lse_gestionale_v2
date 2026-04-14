@@ -14,12 +14,6 @@
         "smoke": "node tests/smoke.test.js",
         "test": "jest --coverage",
         "test:watch": "jest --watch",
-        "docker:build": "docker compose build --no-cache",
-        "docker:up": "docker compose up -d --build",
-        "docker:down": "docker compose down -v",
-        "docker:logs": "docker compose logs -f backend",
-        "docker:test": "docker compose exec backend node tests/smoke-test-v2.js",
-        "docker:clean": "docker compose down -v && docker image prune -f",
         "backup": "echo 'Backup MongoDB - usa MongoDB Atlas per backup automatici o mongodump per backup manuali'"
     },
     "dependencies": {

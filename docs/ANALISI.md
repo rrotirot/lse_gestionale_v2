@@ -20,7 +20,6 @@ Il progetto è un'applicazione web completa per la gestione dei membri dell'orga
 - **Sicurezza**: Helmet, CORS, Rate limiting, Express Validator
 - **Documentazione**: Swagger UI per API documentation
 - **Testing**: Jest con test di fumo e integrazione
-- **Containerizzazione**: Docker support completo
 
 ### 📁 Struttura del Progetto
 
@@ -113,7 +112,6 @@ json {   "express": "^4.18.2",   "mongoose": "^8.0.3",   "jsonwebtoken": "^9.0.2
 
 - **Ottimizzazione Calendario**: Riduzione spazio verticale (25-35% target)
 - **Testing**: Jest configurato, test di fumo implementati
-- **Containerizzazione**: Docker completo con CI/CD
 
 ### 🎯 Caratteristiche Tecniche
 
@@ -134,7 +132,6 @@ json {   "express": "^4.18.2",   "mongoose": "^8.0.3",   "jsonwebtoken": "^9.0.2
 #### Scalabilità
 
 - Database MongoDB (locale/Atlas/cloud)
-- Docker containerization
 - API versioning
 - Logging strutturato con Winston
 

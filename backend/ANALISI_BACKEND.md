@@ -76,7 +76,6 @@ Autenticazione e middleware:
 ## Miglioramenti a medio termine
 - Introdurre test automatici e GitHub Actions per smoke-tests (build frontend + health-check backend).
 - Considerare protezioni antibrute-force per login e endpoint di import.
-- Valutare deployment con Docker + `docker-compose` (incluso MongoDB per dev).
 - Rotazione delle API keys e gestione segreti con Vault/Secrets Manager in produzione.
 
 ## Roadmap implementazione (priorità)
@@ -144,11 +143,6 @@ Autenticazione e middleware:
   - Impatto: PRs non possono mergiare se smoke-test fallisce
 
 ### Fase 4: Deployment e Secrets Management (2-3 settimane)
-- [ ] **Task 4.1**: Aggiungere `Dockerfile` e `docker-compose.yml` per backend
-  - Dockerfile: Node 18+, installa dipendenze, espone porta 5000
-  - docker-compose: backend + MongoDB (per dev/test)
-  - Impatto: deployment replicabile e consistent
-  
 - [ ] **Task 4.2**: Configurare secrets su GitHub (se usar Actions)
   - Segreti: `MONGODB_URI`, `JWT_SECRET`, `API_KEY` (per staging/production)
   - Impatto: non committare segreti nel repo
@@ -196,10 +190,8 @@ Autenticazione e middleware:
   - Smoke-test e GitHub Actions
   - Impatto: qualità assurance
   
-- **Settimana 5 (PIANIFICATA)**: Fase 4 (Docker + secrets)
-  - Dockerfile, docker-compose, secrets management
-  - Impatto: deployment scalabile e replicabile
-  
+- **Settimana 5 (PIANIFICATA)**: Fase 4 (secrets management)
+
 - **Dopo settimana 5 (ITERATIVO)**: Fase 5 (ottimizzazioni)
   - Cache, API versioning, Swagger docs
   - Impatto: API maturity
