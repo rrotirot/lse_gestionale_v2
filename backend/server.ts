@@ -46,8 +46,9 @@ const mongooseOptions = {
 const app = express();
 
 // Configurazione multer per upload file
+// Usiamo memoryStorage per evitare salvataggi permanenti su disco.
 const upload = multer({
-    dest: 'uploads/',
+    storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
     fileFilter: (req, file, cb) => {
         const allowedTypes = ['text/plain', 'text/csv'];
@@ -635,7 +636,13 @@ app.post('/api/v1/members/import', checkMongoConnection, upload.single('file'), 
         }
 
         const estensione = path.extname(req.file.originalname);
-        const fileContent = fs.readFileSync(req.file.path, 'utf-8');
+        const fileContent = req.file.buffer ? req.file.buffer.toString('utf-8') : '';
+        if (!fileContent) {
+            return res.status(400).json({
+                success: false,
+                error: 'Contenuto file vuoto o non leggibile'
+            });
+        }
         const members = await parseMemberDataFromFile(fileContent, estensione);
 
         if (members.length === 0) {
@@ -730,9 +737,6 @@ app.post('/api/v1/members/import', checkMongoConnection, upload.single('file'), 
         if (operations.length > 0) {
             bulkResult = await Member.bulkWrite(operations, { ordered: false });
         }
-
-        // Rimuovi file temporaneo
-        require('fs').unlinkSync(req.file.path);
 
         return res.json({
             success: true,
@@ -1898,6 +1902,85 @@ app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToke
         return res.status(500).json({
             success: false,
             error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per eliminare un membro (salva nel DB eliminati prima di rimuovere)
+app.delete('/api/v1/members/:key', strictLimiter, checkMongoConnection, authenticateToken, async (req, res) => {
+    try {
+        const { key } = req.params;
+        const { deletionReasons } = (req.body || {}) as { deletionReasons?: unknown };
+
+        const numericKey = parseInt(String(key), 10);
+        if (!Number.isFinite(numericKey)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Key non valida'
+            });
+        }
+
+        // Trova il membro da eliminare
+        const member = await Member.findOne({ key: numericKey });
+
+        // Se non è nel DB principale, verifica se è già nei deleted-members (delete idempotente)
+        if (!member) {
+            const alreadyDeleted = await DeletedMember.findOne({ key: numericKey }).lean();
+            if (alreadyDeleted) {
+                return res.json({
+                    success: true,
+                    message: 'Membro già eliminato',
+                    alreadyDeleted: true,
+                    deletedAt: alreadyDeleted.deletedAt,
+                    deletedBy: alreadyDeleted.deletedBy,
+                    deletionReasons: Array.isArray(alreadyDeleted.deletionReasons) ? alreadyDeleted.deletionReasons : []
+                });
+            }
+
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
+        const deletedByUsername = req.user?.username || 'system';
+        const deletedAt = new Date();
+
+        // Assicurati che deletionReasons sia sempre un array
+        const finalDeletionReasons = Array.isArray(deletionReasons) ? deletionReasons : [];
+
+        // Salva il membro nel database dei membri eliminati
+        const memberData = member.toObject();
+        const deletedMemberData: any = {
+            ...memberData,
+            deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons,
+            originalCreatedAt: memberData.createdAt,
+            originalUpdatedAt: memberData.updatedAt
+        };
+
+        // Rimuovi _id per evitare conflitti
+        delete deletedMemberData._id;
+
+        const deletedMember = new DeletedMember(deletedMemberData);
+        await deletedMember.save();
+
+        // Elimina il membro dal database principale
+        await Member.findOneAndDelete({ key: numericKey });
+
+        return res.json({
+            success: true,
+            message: 'Membro eliminato con successo e salvato nel database eliminati',
+            deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons
+        });
+    } catch (error: any) {
+        console.error('Errore nell\'eliminazione membro:', error);
+        return res.status(500).json({
+            success: false,
+            error: error?.message || 'Errore interno del server'
         });
     }
 });

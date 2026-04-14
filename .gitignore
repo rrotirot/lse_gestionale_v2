@@ -24,6 +24,7 @@ backend/node_modules/
 backend/dist/
 backend/coverage/
 backend/logs/
+backend/uploads/
 
 
 # Editor directories and files

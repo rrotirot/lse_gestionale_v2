@@ -2,9 +2,11 @@ import React from 'react';
 
 export default function MembersActions({ 
     onAddMember, 
+    onCheckDb,
     onValidateAll, 
     validatingAll = false, 
     validationProgress = { current: 0, total: 0 },
+    checkingDb = false,
     disabled = false 
 }) {
     return (
@@ -18,6 +20,24 @@ export default function MembersActions({
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
                 Aggiungi Membro
+            </button>
+            <button
+                onClick={onCheckDb}
+                disabled={checkingDb || disabled}
+                className="h-10 px-3 py-2 rounded text-sm bg-slate-700 dark:bg-slate-600 text-white border-slate-800 dark:border-slate-700 hover:bg-slate-800 dark:hover:bg-slate-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Controlla la presenza dei membri nel DB"
+            >
+                {checkingDb ? (
+                    <>
+                        <span className="animate-spin">⏳</span>
+                        <span>Controllo DB...</span>
+                    </>
+                ) : (
+                    <>
+                        <span>🗄️</span>
+                        <span>Controlla DB</span>
+                    </>
+                )}
             </button>
             <button
                 onClick={onValidateAll}

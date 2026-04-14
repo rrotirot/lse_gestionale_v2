@@ -68,6 +68,7 @@ export default function MembersPage({ onNavigateToHome }) {
     const validationProgress = useRef({ current: 0, total: 0 });
     const [showHelpModal, setShowHelpModal] = useState(false);
     const [showBackToTop, setShowBackToTop] = useState(false);
+    const [checkingDb, setCheckingDb] = useState(false);
 
     // Carica i membri quando la pagina viene montata
     useEffect(() => {
@@ -204,6 +205,42 @@ export default function MembersPage({ onNavigateToHome }) {
         setTimeout(() => refreshMembers(), 300);
     };
 
+    const handleCheckDb = async () => {
+        if (checkingDb) return;
+        setCheckingDb(true);
+        try {
+            const response = await fetch(`${rsiApiUrl}/api/v1/members`, {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+            });
+
+            if (!response.ok) {
+                let msg = `Errore HTTP ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    msg = errorData?.error || errorData?.message || msg;
+                } catch {
+                    // ignore
+                }
+                alert(`Controllo DB fallito: ${msg}`);
+                return;
+            }
+
+            const data = await response.json().catch(() => null);
+            const count = data?.members?.length ?? data?.count ?? 0;
+            const localCount = Array.isArray(members) ? members.length : 0;
+
+            alert(`Controllo DB OK: trovati ${count} membri nel DB. (In UI: ${localCount})`);
+
+            // Sincronizza la UI con il DB
+            await refreshMembers();
+        } catch (err) {
+            alert(`Controllo DB fallito: ${err?.message || 'Errore di connessione'}`);
+        } finally {
+            setCheckingDb(false);
+        }
+    };
+
     if (!isUserVerified()) {
         return (
             <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
@@ -272,9 +309,11 @@ export default function MembersPage({ onNavigateToHome }) {
                         </div>
                         <MembersActions
                             onAddMember={() => setShowAddMemberModal(true)}
+                            onCheckDb={handleCheckDb}
                             onValidateAll={handleValidateAll}
                             validatingAll={validatingAll}
                             validationProgress={validationProgress.current}
+                            checkingDb={checkingDb}
                             disabled={loading}
                         />
                     </div>

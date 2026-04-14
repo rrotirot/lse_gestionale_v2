@@ -37,6 +37,11 @@ export function MembersProvider({ children }) {
     // Usa useMemberFilters per gestire i filtri
     const filters = useMemberFilters(members);
 
+    const normalizeKey = (k) => {
+        const n = typeof k === 'number' ? k : parseInt(String(k), 10);
+        return Number.isFinite(n) ? n : null;
+    };
+
     // Funzione per ricaricare i membri dal database
     const refreshMembers = useCallback(async () => {
         setLoading(true);
@@ -65,7 +70,8 @@ export function MembersProvider({ children }) {
                     // Aggiorna anche il membro selezionato se esiste ancora
                     setSelectedMember(prevSelected => {
                         if (!prevSelected) return null;
-                        const updatedSelected = data.members.find(m => m.key === prevSelected.key);
+                        const prevKey = normalizeKey(prevSelected.key);
+                        const updatedSelected = data.members.find(m => normalizeKey(m.key) === prevKey);
                         return updatedSelected || null;
                     });
                 } else {
@@ -83,7 +89,7 @@ export function MembersProvider({ children }) {
         } finally {
             setLoading(false);
         }
-    });
+    }, []);
 
     // Funzione per caricare i membri eliminati
     const loadDeletedMembers = useCallback(async () => {
@@ -213,12 +219,13 @@ export function MembersProvider({ children }) {
         try {
             const response = await membersService.updateMember(memberKey, memberData);
             if (response.success) {
+                const targetKey = normalizeKey(memberKey);
                 // Aggiorna lo stato locale
                 setMembers(prevMembers =>
-                    prevMembers.map(m => m.key === memberKey ? { ...m, ...memberData } : m)
+                    prevMembers.map(m => normalizeKey(m.key) === targetKey ? { ...m, ...memberData } : m)
                 );
                 // Aggiorna anche il membro selezionato se è quello modificato
-                if (selectedMember && selectedMember.key === memberKey) {
+                if (selectedMember && normalizeKey(selectedMember.key) === targetKey) {
                     setSelectedMember({ ...selectedMember, ...memberData });
                 }
                 // Non ricaricare tutti i membri, l'aggiornamento locale è sufficiente
@@ -230,7 +237,7 @@ export function MembersProvider({ children }) {
             console.error('Errore nell\'aggiornamento membro:', error);
             return { success: false, error: error.message || 'Errore di connessione' };
         }
-    }, [selectedMember, refreshMembers]);
+    }, [selectedMember]);
 
     // Funzione per aggiungere un membro
     const addMember = useCallback(async (memberData) => {
@@ -253,10 +260,11 @@ export function MembersProvider({ children }) {
         try {
             const response = await membersService.deleteMember(memberKey, deletionReasons);
             if (response.success) {
+                const targetKey = normalizeKey(memberKey);
                 // Rimuovi il membro dalla lista locale
-                setMembers(prevMembers => prevMembers.filter(m => m.key !== memberKey));
+                setMembers(prevMembers => prevMembers.filter(m => normalizeKey(m.key) !== targetKey));
                 // Chiudi il modal se il membro eliminato era selezionato
-                if (selectedMember && selectedMember.key === memberKey) {
+                if (selectedMember && normalizeKey(selectedMember.key) === targetKey) {
                     setSelectedMember(null);
                 }
                 return { success: true };
