@@ -81,7 +81,8 @@ app.get('/api/v1/rsi/orgs/:handle', async (req, res) => {
     }
 
     try {
-        const cacheKey = `rsi:orgs:${handle.toLowerCase()}`;
+        // Cache key versioned per evitare cache "stale" dopo cambi logica parsing/validation
+        const cacheKey = `rsi:orgs:v14:${handle.toLowerCase()}`;
         try {
             const cachedResult = await cache.get(cacheKey);
             if (cachedResult) {
@@ -163,20 +164,360 @@ app.get('/api/v1/rsi/orgs/:handle', async (req, res) => {
 
         const requiredMainOrg = 'Logistic Space Economy';
         const hasMainName = !!mainOrgName;
-        const mainOrgVerified = hasMainName && mainOrgName.trim() === requiredMainOrg;
+        const normalizeOrgName = (s: string) =>
+            String(s || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, ' ')
+                .replace(/[_-]+/g, ' ');
+
+        // Alias: ALSE è equivalente a Logistic Space Economy
+        const mainNorm = mainOrgName ? normalizeOrgName(mainOrgName) : '';
+        const mainOrgVerified = hasMainName && (mainNorm === normalizeOrgName(requiredMainOrg) || mainNorm === 'alse');
+
+        // Estrai le org dalla pagina (best-effort)
+        // Strategia:
+        // - prendi tutti i link che puntano a /orgs/<HANDLE>
+        // - ricava il *nome* org (non il tag) dal contesto DOM, evitando handle tipo "LZA"
+        const orgsMap = new Map<string, { handle: string; sid: string | null; name: string; url: string; spectrumUrl?: string }>();
+        try {
+            const pickOrgName = (text: string, handle: string) => {
+                const cleaned = String(text || '')
+                    .replace(/\s+/g, ' ')
+                    .replace(/\[[^\]]+\]/g, ' ') // rimuove eventuali [TAG]
+                    .trim();
+
+                if (!cleaned) return null;
+                const lower = cleaned.toLowerCase();
+                const handleLower = String(handle || '').trim().toLowerCase();
+
+                // Se è solo il tag/handle (es. "LZA" o "LZA-CREW"), scarta.
+                if (handleLower && lower === handleLower) return null;
+                if (/^[A-Z0-9_-]{2,8}$/.test(cleaned) && !cleaned.includes(' ')) return null;
+
+                // Evita testi "rumorosi"
+                if (lower.includes('members') || lower.includes('member') || lower.includes('overview')) return null;
+
+                // Accetta anche nomi a singola parola, purché non sembrino un tag (troppo corto / tutto maiuscolo corto).
+                if (cleaned.length >= 3 && cleaned.length <= 120) {
+                    return cleaned;
+                }
+                return null;
+            };
+
+            const normalizeUrl = (href: string) => {
+                const h = String(href || '').trim();
+                if (!h) return '';
+                if (h.startsWith('http://') || h.startsWith('https://')) return h;
+                if (h.startsWith('/')) return `https://robertsspaceindustries.com${h}`;
+                return `https://robertsspaceindustries.com/${h}`;
+            };
+
+            const extractSidNearElement = (el: any) => {
+                try {
+                    const $el = $(el);
+                    // Scope più stretto possibile: la "card/voce" dell'org nella pagina organizations del membro
+                    const scope = $el.closest('li, .organization, .org-item, .org, .orgs, .row, .line, .entry');
+                    const label = scope
+                        .find('span.label')
+                        .filter((_, x) => {
+                            const t = $(x).text().replace(/\s+/g, ' ').trim();
+                            return t === 'Spectrum Identification (SID)';
+                        })
+                        .first();
+
+                    if (label && label.length > 0) {
+                        // Struttura tipica (come screenshot):
+                        // <p class="entry">
+                        //   <span class="label">Spectrum Identification (SID)</span>
+                        //   <strong class="value">ALSE</strong>
+                        // </p>
+                        const entry = label.closest('p.entry');
+                        const valueText = entry.find('strong.value, .value').first().text();
+                        const sidText = String(valueText || '').replace(/\s+/g, ' ').trim();
+                        if (sidText && /^[A-Z0-9]{2,10}$/.test(sidText)) {
+                            return sidText.toUpperCase();
+                        }
+                    }
+                } catch {
+                    // ignore
+                }
+                return null;
+            };
+
+            $('a[href]').each((_, el) => {
+                const href = ($(el).attr('href') || '').toString();
+                const hrefLower = href.toLowerCase();
+
+                // Caso 1: link "orgs" classico (preferito)
+                const orgHandleMatch = href.match(/\/orgs\/([A-Za-z0-9_-]{2,})/);
+
+                // Caso 2: Spectrum identifier (DA USARE SOLO PER LINK, NON PER CONTEGGIO)
+                // Esempi possibili:
+                // - /spectrum/community/SC/orgs/123456
+                // - /spectrum/community/SC/organizations/123456
+                const spectrumIdMatch =
+                    (hrefLower.includes('spectrum') || hrefLower.includes('/community/'))
+                        ? (href.match(/\/orgs\/(\d{3,})/) || href.match(/\/organizations\/(\d{3,})/))
+                        : null;
+
+                let handle = '';
+                let key = '';
+                let url = '';
+                let sid: string | null = null;
+
+                if (orgHandleMatch) {
+                    handle = (orgHandleMatch[1] || '').trim();
+                    if (!handle) return;
+                    // Escludi handle solo numerici (rumore)
+                    if (/^\d+$/.test(handle)) return;
+                    key = handle.toUpperCase();
+                    // Prova prima a leggere il SID direttamente dalla pagina "organizations" del membro
+                    // (riga: Spectrum Identification (SID))
+                    sid = extractSidNearElement(el);
+                    url = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(handle)}`;
+                } else if (spectrumIdMatch) {
+                    const spectrumId = (spectrumIdMatch[1] || '').trim();
+                    if (!spectrumId) return;
+                    // "handle" fittizio non numerico, così non viene scartato dalla logica più avanti
+                    handle = `spectrum:${spectrumId}`;
+                    key = handle.toUpperCase();
+                    sid = extractSidNearElement(el);
+                    url = normalizeUrl(href);
+                } else {
+                    return;
+                }
+
+                // Se abbiamo già il SID, normalizza l'URL verso la pagina org pubblica
+                if (sid) {
+                    url = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(sid)}`;
+                }
+
+                // Prova a estrarre il nome org dal contenitore più ampio (spesso include sia TAG che Nome)
+                const rawLinkText = ($(el).text() || '').replace(/\s+/g, ' ').trim();
+                const containerText = ($(el).closest('li, .organization, .org, .org-item, .orgs, .line, .row').text() || '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                // Candidate in ordine di qualità
+                const candidates = [containerText, rawLinkText].filter(Boolean);
+                let name: string | null = null;
+                for (const c of candidates) {
+                    const picked = pickOrgName(c, handle);
+                    // Ulteriore filtro: se è una parola singola molto corta, probabilmente è tag → scarta.
+                    if (picked) {
+                        const oneWord = !picked.includes(' ');
+                        if (oneWord && picked.length < 6 && /^[A-Z0-9_-]+$/.test(picked)) {
+                            continue;
+                        }
+                        name = picked;
+                        break;
+                    }
+                }
+
+                // Fallback: se proprio non troviamo un nome "umano", non mostriamo il tag come nome.
+                // Manteniamo comunque l'org per conteggio tramite handle.
+                const finalName = name || '';
+
+                if (!orgsMap.has(key)) {
+                    orgsMap.set(key, {
+                        handle,
+                        sid,
+                        name: finalName,
+                        url,
+                        spectrumUrl: sid ? undefined : url
+                    });
+                }
+            });
+
+            // Fallback se il DOM non contiene link orgs
+            if (orgsMap.size === 0) {
+                const matches = Array.from(html.matchAll(/\/orgs\/([A-Za-z0-9_-]{2,})/g));
+                for (const mm of matches) {
+                    const handle = (mm[1] || '').trim();
+                    if (!handle) continue;
+                    if (/^\d+$/.test(handle)) continue;
+                    const key = handle.toUpperCase();
+                    if (!orgsMap.has(key)) {
+                        orgsMap.set(key, {
+                            handle,
+                            sid: null,
+                            name: '',
+                            url: `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(handle)}`
+                        });
+                    }
+                }
+            }
+        } catch {
+            // best-effort
+        }
+
+        const orgs = Array.from(orgsMap.values());
+
+        // Se abbiamo org con Spectrum identifier, prova a risolvere il SID dalla pagina org
+        // (cerca la label "Spectrum Identification (SID)" e prende il valore vicino)
+        const resolveSidFromOrgPageHtml = (orgHtml: string) => {
+            try {
+                const $org = cheerio.load(orgHtml);
+                const labelEl = $org('span.label')
+                    .filter((_, el) => $org(el).text().replace(/\s+/g, ' ').trim().toLowerCase() === 'spectrum identification (sid)')
+                    .first();
+                if (labelEl && labelEl.length > 0) {
+                    // Prova a leggere il valore vicino/sotto la label
+                    const container = labelEl.closest('li, .row, .field, .line, .info, .info-row, .organization-info');
+                    const candidates = [
+                        container.find('span.value').first().text(),
+                        container.find('strong, b').first().text(),
+                        labelEl.parent().find('span.value').first().text(),
+                        labelEl.parent().find('strong, b').first().text(),
+                        container.text(),
+                        labelEl.parent().text(),
+                    ]
+                        .map(t => String(t || '').replace(/\s+/g, ' ').trim())
+                        .filter(Boolean);
+
+                    for (const c of candidates) {
+                        // SID tipico: 2-10 chars A-Z0-9 (solo maiuscole/numero)
+                        const m = c.match(/\b([A-Z0-9]{2,10})\b/);
+                        if (m && m[1]) return m[1].toUpperCase();
+                    }
+                }
+
+                // Fallback regex (senza DOM) — cerca vicino alla label
+                const m2 = String(orgHtml).match(/Spectrum Identification\s*\(SID\)[\s\S]{0,600}?\b([A-Z0-9]{2,10})\b/);
+                return m2 && m2[1] ? String(m2[1]).toUpperCase() : null;
+            } catch {
+                return null;
+            }
+        };
+
+        // Risolvi SID dalla pagina dell'org cercando la label "Spectrum Identification (SID)"
+        // (best-effort; poche org per utente)
+        for (const o of orgs) {
+            if (o.sid) continue;
+            const urlToFetch = String(o.url || o.spectrumUrl || '').trim();
+            if (!urlToFetch) continue;
+
+            try {
+                const r = await fetch(urlToFetch, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                });
+                if (!r.ok) continue;
+                const orgHtml = await r.text();
+                const sidResolved = resolveSidFromOrgPageHtml(orgHtml);
+                if (sidResolved) {
+                    o.sid = sidResolved;
+                    // Normalizza sempre l'URL pubblico via SID
+                    o.url = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(sidResolved)}`;
+                }
+            } catch {
+                // best-effort
+            }
+        }
+
+        // Conteggio org basato sui NOMI (non tag/handle), includendo sempre la main org.
+        // Questo evita falsi positivi dovuti a link org "rumorosi" senza nome reale.
+        const orgNameSet = new Set<string>();
+        for (const o of orgs) {
+            const n = String(o?.name || '').trim();
+            if (n) orgNameSet.add(n.toLowerCase());
+        }
+        if (mainOrgName) {
+            const mainN = String(mainOrgName).trim();
+            if (mainN) orgNameSet.add(mainN.toLowerCase());
+        }
+
+        const orgCount = orgNameSet.size;
+        const hasOnlyOneOrg = orgCount === 1;
+
+        const issues: string[] = [];
+        if (orgCount === 0) {
+            issues.push('Nessuna organizzazione trovata');
+        } else if (orgCount !== 1) {
+            issues.push(`Ha ${orgCount} organizzazioni invece di 1`);
+        }
+        if (!mainOrgVerified) {
+            issues.push(hasMainName ? `Main Org diversa da "${requiredMainOrg}"` : 'Main organization non trovata');
+        }
+
+        // Mostra solo nomi org (non tag/handle). Filtra stringhe vuote.
+        // Preferisci la lista nomi unici (case-insensitive) per coerenza con il conteggio.
+        const orgNames = Array.from(orgNameSet.values()).map(v => {
+            // ripristina la capitalizzazione originale quando possibile
+            const fromList = orgs.find(o => String(o?.name || '').trim().toLowerCase() === v);
+            if (fromList && String(fromList.name || '').trim()) return String(fromList.name).trim();
+            if (mainOrgName && String(mainOrgName).trim().toLowerCase() === v) return String(mainOrgName).trim();
+            return v;
+        });
+        const orgsString =
+            orgNames.length > 0
+                ? orgNames.join(', ')
+                : (mainOrgName || '');
+
+        // Prova a derivare il link della main org:
+        // - prima da alias noti (es. LSE => /orgs/ALSE)
+        // - poi dai link /orgs/<HANDLE> presenti in pagina
+        const knownOrgHandles: Record<string, string> = {
+            'logistic space economy': 'ALSE',
+            'alse': 'ALSE',
+        };
+        let mainOrgHandle: string | null = null;
+        let mainOrgUrl: string | null = null;
+        if (mainOrgName) {
+            const aliasHandle = knownOrgHandles[normalizeOrgName(mainOrgName)];
+            if (aliasHandle) {
+                mainOrgHandle = aliasHandle;
+                mainOrgUrl = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(aliasHandle)}`;
+            }
+
+            const mainNameNorm = String(mainOrgName).trim().toLowerCase();
+            const matchByName = orgs.find(o => String(o?.name || '').trim().toLowerCase() === mainNameNorm);
+            if (matchByName && matchByName.handle && !/^\d+$/.test(matchByName.handle)) {
+                mainOrgHandle = String(matchByName.handle).trim();
+                if (mainOrgHandle) {
+                    mainOrgUrl = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(mainOrgHandle)}`;
+                }
+            }
+            // Fallback: se non abbiamo handle, offriamo un link di ricerca organizzazioni
+            if (!mainOrgUrl) {
+                mainOrgUrl = `https://robertsspaceindustries.com/en/community/orgs/`;
+            }
+        }
+
+        // Aggiungi la main org tra le org restituite se manca, così UI/diagnostica restano coerenti.
+        if (mainOrgName) {
+            const mainNameNorm = String(mainOrgName).trim().toLowerCase();
+            const alreadyHasMainByName = orgs.some(o => String(o?.name || '').trim().toLowerCase() === mainNameNorm);
+            if (!alreadyHasMainByName) {
+                orgs.push({
+                    // Se conosciamo il SID (es. ALSE), usalo come handle (così la UI può linkare via SID)
+                    handle: mainOrgHandle || 'MAIN',
+                    sid: mainOrgHandle || null,
+                    name: String(mainOrgName).trim(),
+                    url: mainOrgUrl || `https://robertsspaceindustries.com/en/community/orgs/`
+                });
+            }
+        }
 
         const result = {
             success: true,
             user_handle: handle,
-            orgs: [],
-            orgs_string: mainOrgName || '',
-            count: 0,
+            orgs: orgs,
+            orgs_string: orgsString,
+            count: orgCount,
             validation: {
-                isValid: mainOrgVerified,
-                hasOnlyOneOrg: false,
+                // Regola: se esiste anche solo 1 issue, la validazione deve fallire.
+                isValid: mainOrgVerified && hasOnlyOneOrg && issues.length === 0,
+                hasOnlyOneOrg: hasOnlyOneOrg,
                 hasMainName: hasMainName,
                 mainOrgName: mainOrgName,
-                issues: mainOrgVerified ? [] : [hasMainName ? `Main Org diversa da "${requiredMainOrg}"` : 'Main organization non trovata']
+                mainOrgHandle: mainOrgHandle,
+                mainOrgUrl: mainOrgUrl,
+                issues: issues
             }
         };
 
@@ -318,6 +659,36 @@ const strictLimiter = rateLimit({
 });
 
 app.use(express.json());
+
+// ==================== DEBUG LOG (DEV ONLY) ====================
+// Minimal client-side debug events appended to `debug-3fb3f6.log` in repo root.
+// Do NOT include secrets/PII in payloads.
+if (process.env.NODE_ENV !== 'production') {
+    app.post('/api/v1/_debug/log', (req: any, res: any) => {
+        try {
+            const session = String(req.headers['x-debug-session-id'] || '');
+            if (session !== '3fb3f6') {
+                return res.status(403).json({ success: false, error: 'invalid session' });
+            }
+
+            const payload = (req.body && typeof req.body === 'object') ? req.body : {};
+            const safe = {
+                sessionId: String(payload.sessionId || ''),
+                runId: String(payload.runId || ''),
+                hypothesisId: String(payload.hypothesisId || ''),
+                location: String(payload.location || ''),
+                message: String(payload.message || ''),
+                data: (payload.data && typeof payload.data === 'object') ? payload.data : {},
+                timestamp: (typeof payload.timestamp === 'number') ? payload.timestamp : Date.now(),
+            };
+
+            fs.appendFileSync(path.join(process.cwd(), 'debug-3fb3f6.log'), JSON.stringify(safe) + '\n', 'utf8');
+            return res.json({ success: true });
+        } catch (e: any) {
+            return res.status(500).json({ success: false, error: e?.message || 'failed' });
+        }
+    });
+}
 
 // ==================== API VERSIONING ====================
 // Configura versioning per tutti gli endpoint /api/*
@@ -1872,9 +2243,46 @@ app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToke
         }
 
         // Aggiorna il membro con i dati di validazione
+        // Normalizza hasOnlyOneOrg in base a ciò che mostriamo in orgs_string, per evitare mismatch UI:
+        // se orgs_string contiene 1 solo nome, hasOnlyOneOrg deve risultare true.
+        if (orgsData && typeof orgsData === 'object' && orgsData.validation && typeof orgsData.validation === 'object') {
+            const orgsString = String(orgsData.orgs_string || '').trim();
+            if (orgsString) {
+                const displayedNames = orgsString
+                    .split(',')
+                    .map(s => s.trim())
+                    .filter(Boolean);
+
+                if (displayedNames.length === 1) {
+                    orgsData.count = 1;
+                    orgsData.validation.hasOnlyOneOrg = true;
+                    // rimuovi eventuale issue di conteggio se presente
+                    if (Array.isArray(orgsData.validation.issues)) {
+                        orgsData.validation.issues = orgsData.validation.issues.filter(i => !String(i).includes('organizzazioni invece di 1'));
+                    }
+                    // Regola: valido solo se main org corretta, solo 1 org e ZERO issues.
+                    const mainOk = orgsData.validation.hasMainName === true && String(orgsData.validation.mainOrgName || '').trim().length > 0;
+                    const issuesLen = Array.isArray(orgsData.validation.issues) ? orgsData.validation.issues.length : 0;
+                    orgsData.validation.isValid = Boolean(mainOk && orgsData.validation.hasOnlyOneOrg && issuesLen === 0);
+                }
+            }
+
+            // Regola globale: se c'è almeno 1 issue, la validazione deve fallire.
+            const issuesLenGlobal = Array.isArray(orgsData.validation.issues) ? orgsData.validation.issues.length : 0;
+            if (issuesLenGlobal > 0) {
+                orgsData.validation.isValid = false;
+            }
+        }
+
         const updateData = {
             affiliazioniOrg: orgsData.orgs_string || '',
-            orgValidation: orgsData.validation || null,
+            orgValidation: orgsData.validation ? {
+                ...orgsData.validation,
+                // include org list so frontend can render clickable affiliations
+                orgs: Array.isArray(orgsData.orgs) ? orgsData.orgs : [],
+                count: typeof orgsData.count === 'number' ? orgsData.count : undefined,
+                orgs_string: orgsData.orgs_string || '',
+            } : null,
             updatedAt: new Date()
         };
 

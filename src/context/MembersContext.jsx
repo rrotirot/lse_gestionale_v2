@@ -71,8 +71,13 @@ export function MembersProvider({ children }) {
                     setSelectedMember(prevSelected => {
                         if (!prevSelected) return null;
                         const prevKey = normalizeKey(prevSelected.key);
+                        // Se la key non è normalizzabile (NaN/null), non provare a "riallineare"
+                        // per evitare di sostituire/azzerare la selezione durante i refresh.
+                        if (prevKey === null) return prevSelected;
+
                         const updatedSelected = data.members.find(m => normalizeKey(m.key) === prevKey);
-                        return updatedSelected || null;
+                        // Se non lo troviamo, manteniamo la selezione corrente (evita chiusure improvvise della modal)
+                        return updatedSelected || prevSelected;
                     });
                 } else {
                     console.warn('⚠️ Risposta non valida:', data);

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { useMembersContext } from '../context/MembersContext';
 import Header from '../components/layout/Header';
@@ -30,8 +30,6 @@ export default function MembersPage({ onNavigateToHome }) {
         filtered,
         loading,
         error,
-        selectedMember,
-        setSelectedMember,
         query,
         setQuery,
         filterValue,
@@ -51,6 +49,21 @@ export default function MembersPage({ onNavigateToHome }) {
         selectedTag,
     } = useMembersContext();
 
+    // Selezione robusta: usiamo una chiave stabile, non l'oggetto member (che cambia ad ogni refresh)
+    const [selectedMemberKey, setSelectedMemberKey] = useState(null);
+
+    const normalizeKeyString = (k) => {
+        if (k === null || k === undefined) return null;
+        const s = String(k).trim();
+        return s.length ? s : null;
+    };
+
+    const selectedMember = useMemo(() => {
+        const key = normalizeKeyString(selectedMemberKey);
+        if (!key) return null;
+        return members.find(m => normalizeKeyString(m?.key) === key) || null;
+    }, [members, selectedMemberKey]);
+
     const [showAddMemberModal, setShowAddMemberModal] = useState(false);
     const [newMember, setNewMember] = useState({
         name: '',
@@ -65,10 +78,11 @@ export default function MembersPage({ onNavigateToHome }) {
         importFile: null
     });
     const [validatingAll, setValidatingAll] = useState(false);
-    const validationProgress = useRef({ current: 0, total: 0 });
+    const [validationProgress, setValidationProgress] = useState({ current: 0, total: 0 });
     const [showHelpModal, setShowHelpModal] = useState(false);
     const [showBackToTop, setShowBackToTop] = useState(false);
     const [checkingDb, setCheckingDb] = useState(false);
+    const [resettingAllValidation, setResettingAllValidation] = useState(false);
 
     // Carica i membri quando la pagina viene montata
     useEffect(() => {
@@ -188,11 +202,11 @@ export default function MembersPage({ onNavigateToHome }) {
         }
 
         setValidatingAll(true);
-        validationProgress.current = { current: 0, total: membersToValidate.length };
+        setValidationProgress({ current: 0, total: membersToValidate.length });
 
         for (let i = 0; i < membersToValidate.length; i++) {
             const member = membersToValidate[i];
-            validationProgress.current.current = i + 1;
+            setValidationProgress(prev => ({ ...prev, current: i + 1 }));
 
             try {
                 await membersService.validateMember(member.key);
@@ -202,6 +216,7 @@ export default function MembersPage({ onNavigateToHome }) {
         }
 
         setValidatingAll(false);
+        setValidationProgress({ current: 0, total: 0 });
         setTimeout(() => refreshMembers(), 300);
     };
 
@@ -241,6 +256,49 @@ export default function MembersPage({ onNavigateToHome }) {
         }
     };
 
+    const handleResetAllValidation = async () => {
+        if (resettingAllValidation) return;
+        if (!confirm('ATTENZIONE: vuoi resettare la validazione RSI per TUTTI i membri?\n\nQuesta azione cancella affiliazioni/validazione e richiede poi una nuova validazione.')) {
+            return;
+        }
+        setResettingAllValidation(true);
+        try {
+            const authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+            const headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            };
+            if (authToken) {
+                headers['Authorization'] = `Bearer ${authToken}`;
+            }
+
+            const response = await fetch(`${rsiApiUrl}/api/v1/members/reset-validation/all`, {
+                method: 'PUT',
+                headers,
+            });
+
+            if (!response.ok) {
+                let msg = `Errore HTTP ${response.status}`;
+                try {
+                    const errData = await response.json();
+                    msg = errData?.error || errData?.message || msg;
+                } catch {
+                    // ignore
+                }
+                alert(`Reset fallito: ${msg}`);
+                return;
+            }
+
+            const data = await response.json().catch(() => ({}));
+            alert(data?.message || 'Reset validazione completato');
+            await refreshMembers();
+        } catch (err) {
+            alert(`Reset fallito: ${err?.message || 'Errore di connessione'}`);
+        } finally {
+            setResettingAllValidation(false);
+        }
+    };
+
     if (!isUserVerified()) {
         return (
             <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
@@ -275,7 +333,7 @@ export default function MembersPage({ onNavigateToHome }) {
                 showHomeButton={true}
             />
 
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div className="w-full max-w-[1700px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
                 {/* Loading o Error */}
                 {loading && filtered.length === 0 && (
                     <LoadingSpinner message="Caricamento membri..." />
@@ -310,10 +368,12 @@ export default function MembersPage({ onNavigateToHome }) {
                         <MembersActions
                             onAddMember={() => setShowAddMemberModal(true)}
                             onCheckDb={handleCheckDb}
+                            onResetAllValidation={handleResetAllValidation}
                             onValidateAll={handleValidateAll}
                             validatingAll={validatingAll}
-                            validationProgress={validationProgress.current}
+                            validationProgress={validationProgress}
                             checkingDb={checkingDb}
+                            resettingAllValidation={resettingAllValidation}
                             disabled={loading}
                         />
                     </div>
@@ -333,7 +393,7 @@ export default function MembersPage({ onNavigateToHome }) {
                                     </h4>
                                     <MemberList
                                         members={lsePFiltered}
-                                        onMemberSelect={setSelectedMember}
+                                        onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
                                         discordBotToken={discordBotToken}
                                     />
                                 </div>
@@ -351,7 +411,7 @@ export default function MembersPage({ onNavigateToHome }) {
                                     </h4>
                                     <MemberList
                                         members={lseFiltered}
-                                        onMemberSelect={setSelectedMember}
+                                        onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
                                         discordBotToken={discordBotToken}
                                     />
                                 </div>
@@ -372,16 +432,16 @@ export default function MembersPage({ onNavigateToHome }) {
             {/* Modals */}
             <MemberDetailModal
                 member={selectedMember}
-                open={!!selectedMember}
+                open={!!selectedMemberKey && !!selectedMember}
                 onOpenChange={(open) => {
                     if (!open) {
-                        setSelectedMember(null);
+                        setSelectedMemberKey(null);
                         refreshMembers();
                     }
                 }}
                 discordBotToken={discordBotToken}
                 onMemberUpdate={(updatedMember) => {
-                    setSelectedMember(updatedMember);
+                    setSelectedMemberKey(updatedMember?.key ?? updatedMember?.member?.key ?? null);
                     updateMember(updatedMember.key? updatedMember.key : updatedMember.member.key, updatedMember);
                 }}
                 deleteMemberFunction={deleteMember}
@@ -406,7 +466,7 @@ export default function MembersPage({ onNavigateToHome }) {
                     console.log('🖱️ Click su pulsante membri eliminati');
                     setShowDeletedMembers(true);
                 }}
-                className="fixed bottom-6 right-20 w-10 h-10 bg-red-600 dark:bg-red-500 rounded-full shadow-lg hover:bg-red-700 dark:hover:bg-red-600 transition-all duration-200 flex items-center justify-center z-30 hover:scale-110 ring-4 ring-red-300 dark:ring-red-700 ring-opacity-50"
+                className="ui-fab [--fab-right-offset:4rem] [--fab-bottom-offset:0.5rem] w-10 h-10 bg-red-600 dark:bg-red-500 rounded-full shadow-lg hover:bg-red-700 dark:hover:bg-red-600 transition-all duration-200 flex items-center justify-center hover:scale-110 ring-4 ring-red-300 dark:ring-red-700 ring-opacity-50"
                 title="Membri eliminati"
             >
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -417,7 +477,7 @@ export default function MembersPage({ onNavigateToHome }) {
             {/* Bottone floating per help/legenda */}
             <button
                 onClick={() => setShowHelpModal(true)}
-                className="fixed bottom-6 right-6 w-10 h-10 bg-blue-600 dark:bg-blue-500 rounded-full shadow-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-all duration-200 flex items-center justify-center z-30 hover:scale-110 ring-4 ring-blue-300 dark:ring-blue-700 ring-opacity-50"
+                className="ui-fab [--fab-right-offset:0.5rem] [--fab-bottom-offset:0.5rem] w-10 h-10 bg-blue-600 dark:bg-blue-500 rounded-full shadow-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-all duration-200 flex items-center justify-center hover:scale-110 ring-4 ring-blue-300 dark:ring-blue-700 ring-opacity-50"
                 title="Legenda e comandi"
             >
                 <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -497,7 +557,7 @@ export default function MembersPage({ onNavigateToHome }) {
             {/* Back to Top Button */}
             <button
                 onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-                className={`fixed left-4 bottom-4 z-50 bg-indigo-600 dark:bg-indigo-500 text-white p-3 rounded-full shadow-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all duration-300 ${showBackToTop ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+                className={`ui-fab-left [--fab-left-offset:0rem] [--fab-bottom-offset:0rem] bg-indigo-600 dark:bg-indigo-500 text-white p-3 rounded-full shadow-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-all duration-300 ${showBackToTop ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
                 aria-label="Torna in alto"
             >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

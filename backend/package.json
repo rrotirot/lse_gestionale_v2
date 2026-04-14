@@ -10,6 +10,8 @@
         "build": "tsc",
         "start": "node dist/server.js",
         "dev": "ts-node server.ts",
+        "restart:dev": "node scripts/restart-backend.js dev",
+        "restart:start": "node scripts/restart-backend.js start",
         "import-events": "node import-bot-events.js",
         "smoke": "node tests/smoke.test.js",
         "test": "jest --coverage",

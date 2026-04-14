@@ -70,6 +70,160 @@ body {
   color: var(--color-foreground);
 }
 
+/* Floating elements: keep inside viewport (safe-area aware) */
+.ui-fab {
+  position: fixed;
+  z-index: 60;
+  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + var(--fab-bottom-offset, 0px));
+  right: calc(max(1rem, env(safe-area-inset-right)) + var(--fab-right-offset, 0px));
+}
+
+.ui-fab-left {
+  position: fixed;
+  z-index: 60;
+  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + var(--fab-bottom-offset, 0px));
+  left: calc(max(1rem, env(safe-area-inset-left)) + var(--fab-left-offset, 0px));
+}
+
+/* Liquid-glass (glassmorphism) utility */
+.ui-glass {
+  background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.10),
+      rgba(255, 255, 255, 0.04)
+    );
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition:
+    box-shadow 220ms ease,
+    border-color 220ms ease,
+    transform 220ms ease;
+}
+
+.ui-glass--subtle {
+  background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.08),
+      rgba(255, 255, 255, 0.03)
+    );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.22),
+    0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    box-shadow 220ms ease,
+    border-color 220ms ease,
+    transform 220ms ease;
+}
+
+/* Floating UI: no hard borders, only soft fades */
+.ui-float {
+  position: relative;
+  border-radius: 0.85rem;
+  border: 1px solid transparent;
+  background:
+    radial-gradient(140% 120% at 20% 0%, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.02) 55%, rgba(0, 0, 0, 0.0) 70%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.38),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition:
+    box-shadow 220ms ease,
+    transform 220ms ease,
+    filter 220ms ease;
+}
+
+.ui-float::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background:
+    radial-gradient(60% 60% at 20% 10%, rgba(125, 211, 252, 0.10), transparent 60%),
+    radial-gradient(50% 50% at 80% 0%, rgba(167, 139, 250, 0.10), transparent 60%),
+    radial-gradient(60% 70% at 50% 120%, rgba(255, 255, 255, 0.06), transparent 60%);
+  filter: blur(8px);
+  opacity: 0.65;
+}
+
+.ui-float--subtle {
+  position: relative;
+  border-radius: 0.85rem;
+  border: 1px solid transparent;
+  background:
+    radial-gradient(140% 120% at 20% 0%, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 55%, rgba(0, 0, 0, 0.0) 70%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.30),
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition:
+    box-shadow 220ms ease,
+    transform 220ms ease,
+    filter 220ms ease;
+}
+
+.ui-float:hover {
+  box-shadow:
+    0 26px 70px rgba(0, 0, 0, 0.46),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  transform: translateY(-1px);
+}
+
+.ui-float--subtle:hover {
+  box-shadow:
+    0 18px 46px rgba(0, 0, 0, 0.38),
+    0 1px 0 rgba(255, 255, 255, 0.07) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.07) inset;
+  transform: translateY(-1px);
+}
+
+/* Dynamic shadow/highlight on hover for glass blocks */
+.ui-glass:hover {
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.35),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-1px);
+}
+
+.ui-glass--subtle:hover {
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.30),
+    0 1px 0 rgba(255, 255, 255, 0.07) inset;
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-glass,
+  .ui-glass--subtle,
+  .ui-float,
+  .ui-float--subtle {
+    transition: none;
+    transform: none;
+  }
+  .ui-glass:hover,
+  .ui-glass--subtle:hover,
+  .ui-float:hover,
+  .ui-float--subtle:hover {
+    transform: none;
+  }
+}
+
 /* Custom Scrollbar per tutti i browser compatibili */
 /* Webkit browsers (Chrome, Safari, Edge) */
 ::-webkit-scrollbar {
