@@ -8,7 +8,7 @@ Il progetto è un'applicazione web completa per la gestione dei membri dell'orga
 
 #### Frontend (React + Vite)
 
-- **Tecnologie principali**: React 18, Vite, Tailwind CSS, Radix UI
+- **Tecnologie principali**: React 19, Vite, Tailwind CSS, Radix UI
 - **Architettura**: Modulare con Context API, Custom Hooks, Componenti riutilizzabili
 - **Routing**: Implementato manualmente con stato locale (non React Router)
 - **Stato**: Gestito tramite Context Providers (Auth, Members, Events)
@@ -24,15 +24,15 @@ Il progetto è un'applicazione web completa per la gestione dei membri dell'orga
 ### 📁 Struttura del Progetto
 
 ```
-gentionale-lse/
+lse_gestionale_v2/
 ├── src/                          # Frontend React
 │   ├── pages/                    # Pagine principali
 │   │   ├── HomePage.jsx
 │   │   ├── MembersPage.jsx
 │   │   ├── CalendarPage.jsx
 │   │   └── LoginPage.jsx
-│   ├── components/               # Componenti modulari
-│   │   ├── bloc/calendar/        # Componenti calendario
+│   ├── bloc/calendar/            # Componenti calendario (TS/React)
+│   ├── components/               # Componenti modulari UI
 │   │   ├── common/               # Componenti comuni
 │   │   ├── members/              # Componenti membri
 │   │   ├── events/               # Componenti eventi
@@ -45,7 +45,7 @@ gentionale-lse/
 │   ├── models/                   # Modelli MongoDB
 │   ├── lib/                      # Librerie utility
 │   ├── tests/                    # Test suite
-│   └── server.js                 # Server principale
+│   └── server.ts                 # Server principale
 └── public/                       # Asset statici
 ```
 
@@ -59,7 +59,8 @@ gentionale-lse/
 - Integrazione RSI API per affiliazioni Star Citizen
 - Gestione idoneità con evidenziazione visiva
 - Note editabili per ogni membro
-- Tema scuro/chiaro
+- Slider “richiami” (0–3 con step 0.5) con regola: da 1 richiamo → “da tenere d’occhio”
+- Tema dark (impostato di default)
 
 #### 2. **Sistema di Autenticazione**
 

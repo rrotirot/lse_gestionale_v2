@@ -1,17 +1,18 @@
-# Analisi di Vulnerabilità Backend
+# Analisi vulnerabilità backend
 
 ## Panoramica
 Questa analisi di vulnerabilità è stata condotta sul backend Node.js dell'applicazione LSE (Logistic Space Economy). L'obiettivo era identificare potenziali rischi di sicurezza nel codice, nelle configurazioni e nelle dipendenze.
 
-**Data analisi**: 13 novembre 2025  
+**Data analisi**: 2025-11-13  
+**Ultimo aggiornamento stato dipendenze**: 2026-04-14  
 **Ambiente**: Backend Node.js con Express, MongoDB, JWT  
 **Metodologia**: Revisione manuale del codice, controllo dipendenze, analisi configurazioni sicurezza
 
 ## Metodologia Utilizzata
 
-### 1. Controllo Dipendenze
+### 1. Controllo dipendenze
 - Eseguito `npm audit` per identificare vulnerabilità nelle dipendenze
-- Analizzate versioni e severity delle vulnerabilità trovate
+- Applicato `npm audit fix` quando disponibile
 
 ### 2. Revisione Configurazioni Sicurezza
 - Esaminato `server.js` per middleware di sicurezza (Helmet, CORS, Rate Limiting)
@@ -33,14 +34,11 @@ Questa analisi di vulnerabilità è stata condotta sul backend Node.js dell'appl
 
 ## Risultati dell'Analisi
 
-### 🔴 Vulnerabilità Critiche (High Severity)
+## Stato attuale (2026-04-14)
 
-#### Dipendenze Vulnerabili
-- **semver 7.0.0 - 7.5.1**: Vulnerabilità Regular Expression Denial of Service (ReDoS)
-- **Impatto**: Attaccante può causare denial of service attraverso regex malformati
-- **Dipendenze afflitte**: nodemon, simple-update-notifier
-- **Stato**: 3 vulnerabilità high totali
-- **Risoluzione immediata richiesta**
+Al momento l’audit dipendenze backend risulta **pulito**:
+
+- `cd backend && npm audit` → **0 vulnerabilità**
 
 ### 🟡 Vulnerabilità Medie (Medium Severity)
 
@@ -94,10 +92,11 @@ Questa analisi di vulnerabilità è stata condotta sul backend Node.js dell'appl
 
 ## Raccomandazioni di Sicurezza
 
-### Priorità Alta (Implementare Immediatamente)
-1. **Aggiornare dipendenze vulnerabili**
+## Raccomandazioni operative
+1. Eseguire periodicamente:
    ```bash
-   cd backend && npm audit fix --force
+   cd backend
+   npm audit
    ```
 
 2. **Configurare CORS restrittivo in produzione**
@@ -126,13 +125,8 @@ Questa analisi di vulnerabilità è stata condotta sul backend Node.js dell'appl
    });
    ```
 
-5. **Aggiungere timeout alle richieste esterne**
-   ```javascript
-   const response = await fetch(url, {
-       timeout: 10000, // 10 secondi
-       // ... altri headers
-   });
-   ```
+5. **Timeout richieste esterne**
+   - Nel backend è presente un helper con `AbortController` per gestire timeout sulle chiamate esterne (RSI).
 
 ### Priorità Bassa (Miglioramenti Futuri)
 6. **Implementare 2FA per utenti admin**
@@ -156,11 +150,10 @@ Il backend presenta una **buona base di sicurezza** con implementazioni solide p
 
 **Stato raccomandato**: Pronto per produzione dopo fix critici, con monitoraggio continuo delle dipendenze e configurazioni.
 
-## File Esaminati
-- `backend/server.js` - Server principale e configurazioni
-- `backend/models/User.js` - Modello utente e hashing password
-- `backend/package.json` - Dipendenze e versioni
-- `backend/package-lock.json` - Lock file dipendenze
+## File esaminati (indicativi)
+- `backend/server.ts`
+- `backend/models/*`
+- `backend/package.json` / `backend/package-lock.json`
 
 ## Strumenti Utilizzati
 - npm audit - Controllo vulnerabilità dipendenze
