@@ -63,6 +63,134 @@ const upload = multer({
 
 app.get('/test', (req, res) => res.send('ok'));
 
+app.get(['/api/health', '/api/v1/health'], (req, res) => {
+    return res.json({ status: 'ok' });
+});
+
+// Endpoint proxy per ottenere affiliazioni org RSI da record pubblici
+// Usato dalla validazione membri: POST /api/v1/members/:key/validate
+app.get('/api/v1/rsi/orgs/:handle', async (req, res) => {
+    const { handle } = req.params;
+
+    if (!handle) {
+        return res.status(400).json({
+            success: false,
+            error: 'Handle utente richiesto'
+        });
+    }
+
+    try {
+        const cacheKey = `rsi:orgs:${handle.toLowerCase()}`;
+        try {
+            const cachedResult = await cache.get(cacheKey);
+            if (cachedResult) {
+                return res.status(200).json({ ...cachedResult, _cached: true });
+            }
+        } catch {
+            // cache best-effort
+        }
+
+        const orgPageUrl = `https://robertsspaceindustries.com/en/citizens/${encodeURIComponent(handle)}/organizations`;
+        const response = await fetch(orgPageUrl, {
+            method: 'GET',
+            headers: {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        });
+
+        if (!response.ok) {
+            const isNotFound = response.status === 404 || String(response.statusText || '').toLowerCase().includes('not found');
+            const orgsString = isNotFound ? '404' : 'NO ORG MEMBERSHIP FOUND IN PUBLIC RECORDS';
+            const issueMessage = isNotFound ? 'Errore nel recupero dati: Not Found' : `Errore nel recupero dati: ${response.statusText}`;
+
+            const result = {
+                success: true,
+                error: `Errore nel recupero pagina: ${response.statusText}`,
+                user_handle: handle,
+                orgs: [],
+                orgs_string: orgsString,
+                count: 0,
+                validation: {
+                    isValid: false,
+                    hasOnlyOneOrg: false,
+                    hasMainName: false,
+                    mainOrgName: null,
+                    issues: [issueMessage]
+                }
+            };
+
+            try { await cache.set(cacheKey, result, 60 * 60); } catch { }
+            return res.status(response.status).json(result);
+        }
+
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        // Best-effort main org name extraction
+        let mainOrgName = null;
+        const mainOrgMatch = html.match(/Main organization[\s\S]*?<\/h[12]>[\s\S]*?<h[12][^>]*>([^<]+)<\/h[12]>/i);
+        if (mainOrgMatch && mainOrgMatch[1]) {
+            mainOrgName = mainOrgMatch[1].trim();
+        }
+
+        if (!mainOrgName) {
+            const textContent = $('body').text();
+            const lines = textContent.split('\n').map(l => l.trim()).filter(l => l);
+            let foundMain = false;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].toLowerCase().includes('main organization')) {
+                    for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+                        const line = lines[j];
+                        if (
+                            line &&
+                            !line.match(/^\d+$/) &&
+                            !line.toLowerCase().includes('members') &&
+                            !line.toLowerCase().includes('overview') &&
+                            line.length > 2 &&
+                            line.length < 100
+                        ) {
+                            mainOrgName = line;
+                            foundMain = true;
+                            break;
+                        }
+                    }
+                    if (foundMain) break;
+                }
+            }
+        }
+
+        const requiredMainOrg = 'Logistic Space Economy';
+        const hasMainName = !!mainOrgName;
+        const mainOrgVerified = hasMainName && mainOrgName.trim() === requiredMainOrg;
+
+        const result = {
+            success: true,
+            user_handle: handle,
+            orgs: [],
+            orgs_string: mainOrgName || '',
+            count: 0,
+            validation: {
+                isValid: mainOrgVerified,
+                hasOnlyOneOrg: false,
+                hasMainName: hasMainName,
+                mainOrgName: mainOrgName,
+                issues: mainOrgVerified ? [] : [hasMainName ? `Main Org diversa da "${requiredMainOrg}"` : 'Main organization non trovata']
+            }
+        };
+
+        try { await cache.set(cacheKey, result, 60 * 60 * 24); } catch { }
+        return res.json(result);
+
+    } catch (error) {
+        console.error('Errore nel proxy RSI orgs:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
 // Gestione eventi di connessione
 mongoose.connection.on('disconnected', () => {
     console.warn('⚠️  MongoDB disconnesso');
@@ -508,7 +636,7 @@ app.post('/api/v1/members/import', checkMongoConnection, upload.single('file'), 
 
         const estensione = path.extname(req.file.originalname);
         const fileContent = fs.readFileSync(req.file.path, 'utf-8');
-        const members = parseMemberDataFromFile(fileContent, estensione);
+        const members = await parseMemberDataFromFile(fileContent, estensione);
 
         if (members.length === 0) {
             return res.status(400).json({
@@ -517,11 +645,56 @@ app.post('/api/v1/members/import', checkMongoConnection, upload.single('file'), 
             });
         }
 
+        // Deduplica membri nel file (prima di toccare il DB)
+        const seen = new Map();
+        const duplicatesInFile = [];
+        for (const member of members) {
+            const idKey = member?.id ? `id:${String(member.id).trim()}` : null;
+            const keyKey = Number.isFinite(member?.key) ? `key:${member.key}` : null;
+            const dedupeKey = idKey || keyKey || `fallback:${String(member?.name || '').trim()}|${String(member?.index || '').trim()}`;
+
+            if (seen.has(dedupeKey)) {
+                duplicatesInFile.push({
+                    kept: seen.get(dedupeKey)?.name || seen.get(dedupeKey)?.index || dedupeKey,
+                    dropped: member?.name || member?.index || dedupeKey,
+                    reason: `Duplicate in file (${dedupeKey})`
+                });
+                continue;
+            }
+            seen.set(dedupeKey, member);
+        }
+        const uniqueMembers = Array.from(seen.values());
+
+        // Verifica membri già presenti nel DB (evita duplicati)
+        const ids = uniqueMembers.map(m => String(m.id || '').trim()).filter(Boolean);
+        const keys = uniqueMembers.map(m => m.key).filter(k => Number.isFinite(k));
+
+        const existing = await Member.find({
+            $or: [
+                ...(ids.length ? [{ id: { $in: ids } }] : []),
+                ...(keys.length ? [{ key: { $in: keys } }] : []),
+            ]
+        }, { id: 1, key: 1 }).lean();
+
+        const existingIds = new Set(existing.map(e => String(e.id || '').trim()).filter(Boolean));
+        const existingKeys = new Set(existing.map(e => e.key).filter(k => Number.isFinite(k)));
+
         // Verifica membri eliminati
         const errors = [];
         const membersToProcess = [];
 
-        for (const member of members) {
+        const skippedExisting = [];
+        for (const member of uniqueMembers) {
+            const normalizedId = String(member?.id || '').trim();
+            if (normalizedId && existingIds.has(normalizedId)) {
+                skippedExisting.push({ member: member.name || member.index || `id=${normalizedId}`, reason: 'Already exists (id)' });
+                continue;
+            }
+            if (Number.isFinite(member?.key) && existingKeys.has(member.key)) {
+                skippedExisting.push({ member: member.name || member.index || `key=${member.key}`, reason: 'Already exists (key)' });
+                continue;
+            }
+
             const deletedMember = await DeletedMember.findOne({
                 $or: [
                     { key: member.key },
@@ -540,19 +713,22 @@ app.post('/api/v1/members/import', checkMongoConnection, upload.single('file'), 
             membersToProcess.push(member);
         }
 
-        // Inserisci i membri
-        const insertedMembers = [];
-        for (const member of membersToProcess) {
-            try {
-                const newMember = new Member(member);
-                await newMember.save();
-                insertedMembers.push(newMember);
-            } catch (error) {
-                errors.push({
-                    member: member.name || member.index || `key=${member.key}`,
-                    error: error.message
-                });
-            }
+        // Inserisci i membri (upsert per prevenire duplicazioni residue)
+        const operations = membersToProcess.map(member => {
+            const normalizedId = String(member.id || '').trim();
+            const filter = normalizedId ? { id: normalizedId } : { key: member.key };
+            return {
+                updateOne: {
+                    filter,
+                    update: { $set: { ...member, id: normalizedId || member.id } },
+                    upsert: true
+                }
+            };
+        });
+
+        let bulkResult = { upsertedCount: 0, modifiedCount: 0, matchedCount: 0 };
+        if (operations.length > 0) {
+            bulkResult = await Member.bulkWrite(operations, { ordered: false });
         }
 
         // Rimuovi file temporaneo
@@ -560,8 +736,13 @@ app.post('/api/v1/members/import', checkMongoConnection, upload.single('file'), 
 
         return res.json({
             success: true,
-            message: `Importati ${insertedMembers.length} membri`,
-            insertedCount: insertedMembers.length,
+            message: `Import completato: ${bulkResult.upsertedCount} inseriti, ${bulkResult.modifiedCount} aggiornati`,
+            insertedCount: bulkResult.upsertedCount,
+            updatedCount: bulkResult.modifiedCount,
+            skippedExistingCount: skippedExisting.length,
+            duplicatesInFileCount: duplicatesInFile.length,
+            skippedExisting: skippedExisting.length > 0 ? skippedExisting : undefined,
+            duplicatesInFile: duplicatesInFile.length > 0 ? duplicatesInFile : undefined,
             errors: errors.length > 0 ? errors : undefined
         });
     } catch (error) {
@@ -801,8 +982,7 @@ app.post('/api/v1/auth/verify-rsi-code', checkMongoConnection, authenticateToken
             headers: {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            },
-            timeout: 10000 // 10 secondi timeout
+            }
         });
 
         if (!response.ok) {
@@ -1064,8 +1244,7 @@ app.post('/api/v1/auth/verify-rsi-code', checkMongoConnection, authenticateToken
                 headers: {
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                },
-                timeout: 10000 // 10 secondi timeout
+                }
             });
 
             if (orgResponse.ok) {
@@ -1562,7 +1741,7 @@ app.get('/api/v1/members', checkMongoConnection, async (req, res) => {
 });
 
 // Endpoint per resettare la validazione di tutti i membri (DEVE essere PRIMA della route con parametro)
-app.put('/api/v1/members/reset-validation/all', checkMongoConnection, async (req, res) => {
+app.put('/api/v1/members/reset-validation/all', checkMongoConnection, authenticateToken, async (req, res) => {
     try {
         const result = await Member.updateMany(
             {},
@@ -1592,7 +1771,7 @@ app.put('/api/v1/members/reset-validation/all', checkMongoConnection, async (req
 });
 
 // Endpoint per resettare la validazione di un membro (DEVE essere DOPO la route /all)
-app.put('/api/v1/members/:key/reset-validation', checkMongoConnection, async (req, res) => {
+app.put('/api/v1/members/:key/reset-validation', checkMongoConnection, authenticateToken, async (req, res) => {
     try {
         const { key } = req.params;
 
@@ -1632,7 +1811,7 @@ app.put('/api/v1/members/:key/reset-validation', checkMongoConnection, async (re
 });
 
 // Endpoint per validare un membro (controlla affiliazioni org RSI)
-app.post('/api/v1/members/:key/validate', checkMongoConnection, async (req, res) => {
+app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToken, async (req, res) => {
     try {
         const { key } = req.params;
 
@@ -1671,16 +1850,22 @@ app.post('/api/v1/members/:key/validate', checkMongoConnection, async (req, res)
                 'Accept': 'application/json'
             }
         });
-
-        if (!orgsResponse.ok) {
-            console.error(`❌ Errore nel recupero affiliazioni per ${member.id}: ${orgsResponse.status}`);
-            return res.status(orgsResponse.status).json({
-                success: false,
-                error: `Errore nel recupero dati RSI: ${orgsResponse.statusText}`
-            });
+        // Anche se la rotta proxy risponde con status != 200 (es. 404),
+        // vogliamo comunque salvare la validazione sul membro per mostrare badge/issue in UI.
+        let orgsData = null;
+        try {
+            orgsData = await orgsResponse.json();
+        } catch (e) {
+            orgsData = null;
         }
 
-        const orgsData = await orgsResponse.json();
+        if (!orgsData || typeof orgsData !== 'object') {
+            console.error(`❌ Risposta non valida dal proxy orgs per ${member.id}: ${orgsResponse.status}`);
+            return res.status(502).json({
+                success: false,
+                error: `Risposta non valida dal proxy RSI orgs (${orgsResponse.status})`
+            });
+        }
 
         // Aggiorna il membro con i dati di validazione
         const updateData = {

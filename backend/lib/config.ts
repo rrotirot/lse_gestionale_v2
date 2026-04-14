@@ -2,7 +2,7 @@
  * Configurazione e utilità del server
  */
 const { logger } = require('./logger');
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
 /**
  * Valida variabili d'ambiente critiche
@@ -113,3 +113,5 @@ module.exports = {
     setupMongoDB,
     logger
 };
+
+export {};

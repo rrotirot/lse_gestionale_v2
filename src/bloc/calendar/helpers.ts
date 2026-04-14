@@ -28,6 +28,28 @@ import {
 
 import type { ICalendarCell, IEvent } from "@/calendar/interfaces";
 import type { TCalendarView, TVisibleHours, TWorkingHours } from "@/calendar/types";
+import type { TEventColor } from "@/calendar/types";
+
+export function getEventDotClass(color: TEventColor) {
+  switch (color) {
+    case "blue":
+      return "bg-blue-600";
+    case "green":
+      return "bg-green-600";
+    case "red":
+      return "bg-red-600";
+    case "yellow":
+      return "bg-yellow-600";
+    case "purple":
+      return "bg-purple-600";
+    case "orange":
+      return "bg-orange-600";
+    case "gray":
+      return "bg-neutral-600";
+    default:
+      return "bg-neutral-600";
+  }
+}
 
 // ================ Header helper functions ================ //
 

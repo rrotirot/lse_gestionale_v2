@@ -103,3 +103,5 @@ module.exports = {
     versionHandler,
     setupApiVersioning
 };
+
+export {};

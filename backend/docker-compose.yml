@@ -10,14 +10,15 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=5000
-      - MONGODB_URI=mongodb+srv://roccorotiroti_db_user:XQRC9TrDwZ4GApd3wx83@cluster0.lmzr2w8.mongodb.net/?appName=Cluster0
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=change_me_in_prod
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/lse-members}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - JWT_SECRET=${JWT_SECRET:-change_me_in_prod}
     depends_on:
       - redis
     volumes:
       - ./:/usr/src/app
       - /usr/src/app/node_modules
+    command: npm run dev
 
   redis:
     image: redis:7-alpine
@@ -28,7 +29,6 @@ services:
       - redis_data:/data
 
 volumes:
-  mongo_data:
   redis_data:
 
 networks:

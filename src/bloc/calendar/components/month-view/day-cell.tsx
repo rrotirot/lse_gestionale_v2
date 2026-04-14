@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { isToday, startOfDay } from "date-fns";
 
-import { useCalendar } from "@/calendar/contexts/calendar-context";
+import { CALENDAR_MAX_VISIBLE_EVENTS } from "@/calendar/constants";
+import { useCalendarNavigation } from "@/calendar/hooks/use-calendar-navigation";
 
 import { EventBullet } from "@/calendar/components/month-view/event-bullet";
 import { DroppableDayCell } from "@/calendar/components/dnd/droppable-day-cell";
@@ -19,27 +19,19 @@ interface IProps {
   eventPositions: Record<string, number>;
 }
 
-const MAX_VISIBLE_EVENTS = 3;
-
 export function DayCell({ cell, events, eventPositions }: IProps) {
-  const { push } = useRouter();
-  const { setSelectedDate } = useCalendar();
+  const { goToDay } = useCalendarNavigation();
 
   const { day, currentMonth, date } = cell;
 
   const cellEvents = useMemo(() => getMonthCellEvents(date, events, eventPositions), [date, events, eventPositions]);
   const isSunday = date.getDay() === 0;
 
-  const handleClick = () => {
-    setSelectedDate(date);
-    push("/day-view");
-  };
-
   return (
     <DroppableDayCell cell={cell}>
       <div className={cn("flex h-full flex-col gap-1 border-l border-t py-1.5 lg:pb-2 lg:pt-1", isSunday && "border-l-0")}>
         <button
-          onClick={handleClick}
+          onClick={() => goToDay(date)}
           className={cn(
             "flex size-6 translate-x-1 items-center justify-center rounded-full text-xs font-semibold hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring lg:px-2",
             !currentMonth && "opacity-20",
@@ -67,10 +59,10 @@ export function DayCell({ cell, events, eventPositions }: IProps) {
           })}
         </div>
 
-        {cellEvents.length > MAX_VISIBLE_EVENTS && (
+        {cellEvents.length > CALENDAR_MAX_VISIBLE_EVENTS && (
           <p className={cn("h-4.5 px-1.5 text-xs font-semibold text-muted-foreground", !currentMonth && "opacity-50")}>
-            <span className="sm:hidden">+{cellEvents.length - MAX_VISIBLE_EVENTS}</span>
-            <span className="hidden sm:inline"> {cellEvents.length - MAX_VISIBLE_EVENTS} more...</span>
+            <span className="sm:hidden">+{cellEvents.length - CALENDAR_MAX_VISIBLE_EVENTS}</span>
+            <span className="hidden sm:inline"> {cellEvents.length - CALENDAR_MAX_VISIBLE_EVENTS} more...</span>
           </p>
         )}
       </div>

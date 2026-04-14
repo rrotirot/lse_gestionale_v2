@@ -1,29 +1,27 @@
-# Backend Dockerfile for gentionale-lse
-FROM node:20-alpine
+# Backend Dockerfile for gestionale-lse
 
-# Create app directory
+FROM node:20-alpine AS deps
 WORKDIR /usr/src/app
-
-# Copy package manifests
 COPY package*.json ./
-
-# Install all dependencies
 RUN npm ci
 
-# Copy application source
+FROM node:20-alpine AS build
+WORKDIR /usr/src/app
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 COPY . .
+RUN npm run build
 
-# Build TypeScript (allow errors)
-RUN npm run build || true
+FROM node:20-alpine AS runner
+WORKDIR /usr/src/app
+ENV NODE_ENV=production
 
-# Ensure logs directory exists
-RUN mkdir -p ./logs && chown -R node:node ./logs || true
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/dist ./dist
+COPY --from=build /usr/src/app/package.json ./package.json
 
-# Expose server port
+RUN mkdir -p ./logs && chown -R node:node ./logs
+
 EXPOSE 5000
-
-# Use non-root user for better security
 USER node
 
-# Start the server with ts-node
-CMD ["npx", "ts-node", "--transpile-only", "server.ts"]
+CMD ["node", "dist/server.js"]

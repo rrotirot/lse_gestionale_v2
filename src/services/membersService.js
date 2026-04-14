@@ -125,7 +125,8 @@ export const membersService = {
             const error = await response.json().catch(() => ({ message: 'Errore sconosciuto' }));
             throw new Error(error.message || `Errore nella validazione: ${response.status}`);
         }
-        return response.json();
+        const data = await response.json();
+        return data.member || data;
     },
 
     /**

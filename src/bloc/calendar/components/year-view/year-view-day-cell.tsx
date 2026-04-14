@@ -1,9 +1,11 @@
 import { isToday } from "date-fns";
-import { useRouter } from "next/navigation";
 
-import { useCalendar } from "@/calendar/contexts/calendar-context";
+import { CALENDAR_MAX_VISIBLE_EVENTS } from "@/calendar/constants";
+import { useCalendarNavigation } from "@/calendar/hooks/use-calendar-navigation";
 
 import { cn } from "@/lib/utils";
+
+import { getEventDotClass } from "@/calendar/helpers";
 
 import type { IEvent } from "@/calendar/interfaces";
 
@@ -14,20 +16,12 @@ interface IProps {
 }
 
 export function YearViewDayCell({ day, date, events }: IProps) {
-  const { push } = useRouter();
-  const { setSelectedDate } = useCalendar();
-
-  const maxIndicators = 3;
+  const { goToDay } = useCalendarNavigation();
   const eventCount = events.length;
-
-  const handleClick = () => {
-    setSelectedDate(date);
-    push("/day-view");
-  };
 
   return (
     <button
-      onClick={handleClick}
+      onClick={() => goToDay(date)}
       type="button"
       className="flex h-11 flex-1 flex-col items-center justify-start gap-0.5 rounded-md pt-1 hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
@@ -42,19 +36,13 @@ export function YearViewDayCell({ day, date, events }: IProps) {
 
       {eventCount > 0 && (
         <div className="mt-0.5 flex gap-0.5">
-          {eventCount <= maxIndicators ? (
+          {eventCount <= CALENDAR_MAX_VISIBLE_EVENTS ? (
             events.map(event => (
               <div
                 key={event.id}
                 className={cn(
                   "size-1.5 rounded-full",
-                  event.color === "blue" && "bg-blue-600",
-                  event.color === "green" && "bg-green-600",
-                  event.color === "red" && "bg-red-600",
-                  event.color === "yellow" && "bg-yellow-600",
-                  event.color === "purple" && "bg-purple-600",
-                  event.color === "orange" && "bg-orange-600",
-                  event.color === "gray" && "bg-neutral-600"
+                  getEventDotClass(event.color)
                 )}
               />
             ))
@@ -63,12 +51,7 @@ export function YearViewDayCell({ day, date, events }: IProps) {
               <div
                 className={cn(
                   "size-1.5 rounded-full",
-                  events[0].color === "blue" && "bg-blue-600",
-                  events[0].color === "green" && "bg-green-600",
-                  events[0].color === "red" && "bg-red-600",
-                  events[0].color === "yellow" && "bg-yellow-600",
-                  events[0].color === "purple" && "bg-purple-600",
-                  events[0].color === "orange" && "bg-orange-600"
+                  getEventDotClass(events[0].color)
                 )}
               />
               <span className="text-[7px] text-muted-foreground">+{eventCount - 1}</span>

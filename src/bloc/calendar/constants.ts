@@ -1,0 +1,2 @@
+export const CALENDAR_MAX_VISIBLE_EVENTS = 3;
+

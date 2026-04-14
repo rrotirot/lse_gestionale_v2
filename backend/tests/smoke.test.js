@@ -5,7 +5,10 @@
 
 const http = require('http');
 
-const BASE_URL = 'http://localhost:5001';
+const BASE_URL =
+    process.env.SMOKE_BASE_URL ||
+    process.env.BASE_URL ||
+    `http://localhost:${process.env.PORT || 5000}`;
 const HEALTH_ENDPOINT = '/api/v1/health';
 
 console.log('🧪 Esecuzione Smoke Test...\n');

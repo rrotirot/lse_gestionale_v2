@@ -1,8 +1,7 @@
 import { useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { format, isSameDay, parseISO, getDaysInMonth, startOfMonth } from "date-fns";
 
-import { useCalendar } from "@/calendar/contexts/calendar-context";
+import { useCalendarNavigation } from "@/calendar/hooks/use-calendar-navigation";
 
 import { YearViewDayCell } from "@/calendar/components/year-view/year-view-day-cell";
 
@@ -14,8 +13,7 @@ interface IProps {
 }
 
 export function YearViewMonth({ month, events }: IProps) {
-  const { push } = useRouter();
-  const { setSelectedDate } = useCalendar();
+  const { goToMonth } = useCalendarNavigation();
 
   const monthName = format(month, "MMMM");
 
@@ -31,16 +29,11 @@ export function YearViewMonth({ month, events }: IProps) {
 
   const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-  const handleClick = () => {
-    setSelectedDate(new Date(month.getFullYear(), month.getMonth(), 1));
-    push("/month-view");
-  };
-
   return (
     <div className="flex flex-col">
       <button
         type="button"
-        onClick={handleClick}
+        onClick={() => goToMonth(new Date(month.getFullYear(), month.getMonth(), 1))}
         className="w-full rounded-t-lg border px-3 py-2 text-sm font-semibold hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         {monthName}
