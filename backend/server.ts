@@ -2246,8 +2246,17 @@ app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToke
         // Normalizza hasOnlyOneOrg in base a ciò che mostriamo in orgs_string, per evitare mismatch UI:
         // se orgs_string contiene 1 solo nome, hasOnlyOneOrg deve risultare true.
         if (orgsData && typeof orgsData === 'object' && orgsData.validation && typeof orgsData.validation === 'object') {
+            const is404 =
+                orgsResponse.status === 404 ||
+                String(orgsData.orgs_string || '').trim() === '404' ||
+                (Array.isArray(orgsData.validation.issues) &&
+                    orgsData.validation.issues.some((i) => {
+                        const s = String(i || '').toLowerCase();
+                        return s.includes('404') || s.includes('not found');
+                    }));
+
             const orgsString = String(orgsData.orgs_string || '').trim();
-            if (orgsString) {
+            if (orgsString && !is404) {
                 const displayedNames = orgsString
                     .split(',')
                     .map(s => s.trim())
@@ -2271,6 +2280,12 @@ app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToke
             const issuesLenGlobal = Array.isArray(orgsData.validation.issues) ? orgsData.validation.issues.length : 0;
             if (issuesLenGlobal > 0) {
                 orgsData.validation.isValid = false;
+            }
+
+            // Caso 404: non contare nessuna org -> "Solo 1 org" deve risultare NO
+            if (is404) {
+                orgsData.count = 0;
+                orgsData.validation.hasOnlyOneOrg = false;
             }
         }
 
