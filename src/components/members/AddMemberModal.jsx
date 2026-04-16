@@ -31,7 +31,7 @@ export default function AddMemberModal({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 bg-transparent ui-float">
                 <DialogHeader>
                     <DialogTitle>{isBulkImport ? 'Importa Membri da File' : 'Aggiungi Nuovo Membro'}</DialogTitle>
                     <DialogDescription>
@@ -42,13 +42,13 @@ export default function AddMemberModal({
 
                 {/* Toggle Mode */}
                 <div className="flex justify-center mb-4">
-                    <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                    <div className="flex ui-float--subtle rounded-lg p-1 border border-white/10">
                         <button
                             onClick={() => setIsBulkImport(false)}
                             className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
                                 !isBulkImport
-                                    ? 'bg-white dark:bg-gray-700 text-green-600 dark:text-green-400 shadow-sm'
-                                    : 'text-gray-600 dark:text-gray-400'
+                                    ? 'bg-white/10 text-green-200 shadow-sm'
+                                    : 'text-gray-300/80'
                             }`}
                         >
                             <UserPlus className="w-4 h-4" />
@@ -58,8 +58,8 @@ export default function AddMemberModal({
                             onClick={() => setIsBulkImport(true)}
                             className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
                                 isBulkImport
-                                    ? 'bg-white dark:bg-gray-700 text-green-600 dark:text-green-400 shadow-sm'
-                                    : 'text-gray-600 dark:text-gray-400'
+                                    ? 'bg-white/10 text-green-200 shadow-sm'
+                                    : 'text-gray-300/80'
                             }`}
                         >
                             <Upload className="w-4 h-4" />

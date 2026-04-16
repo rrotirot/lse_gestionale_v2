@@ -1,13 +1,15 @@
+import { getApiBaseUrl, getStoredAuthToken } from "../lib/runtime-config";
+
 /**
  * Servizio per le chiamate API relative all'autenticazione
  */
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
 
 export const authService = {
     /**
      * Effettua il login
      */
     async login(username, password) {
+        const rsiApiUrl = getApiBaseUrl();
         // Verifica che l'URL sia valido
         if (!rsiApiUrl || rsiApiUrl.trim() === '') {
             throw new Error('URL del server non configurato. Controlla le impostazioni.');
@@ -42,11 +44,12 @@ export const authService = {
      * Genera un codice di verifica
      */
     async generateVerificationCode() {
-        const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+        const token = getStoredAuthToken();
         if (!token) {
             throw new Error('Token di autenticazione non trovato');
         }
 
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/auth/verification-code`, {
             method: 'POST',
             headers: {
@@ -67,11 +70,12 @@ export const authService = {
      * Verifica il codice RSI
      */
     async verifyCode(rsiHandle, verificationCode) {
-        const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+        const token = getStoredAuthToken();
         if (!token) {
             throw new Error('Token di autenticazione non trovato');
         }
 
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/auth/verify-code`, {
             method: 'POST',
             headers: {

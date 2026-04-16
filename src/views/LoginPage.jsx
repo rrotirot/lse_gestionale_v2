@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+import { getApiBaseUrl } from '../lib/runtime-config';
 
 export default function LoginPage() {
     const { login } = useAuth();
+    const rsiApiUrl = getApiBaseUrl();
     const [isLogin, setIsLogin] = useState(true);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -102,10 +102,10 @@ export default function LoginPage() {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center px-4">
-            <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-8">
+            <div className="max-w-md w-full ui-float border border-white/10 bg-transparent rounded-xl shadow-2xl p-8">
                 <div className="text-center mb-8">
                     <div className="flex justify-center mb-4">
-                        <img 
+                            <img 
                             src="/logo.png" 
                             alt="LSE Logo" 
                             className="h-16 w-16 object-contain"
@@ -130,7 +130,7 @@ export default function LoginPage() {
 
                 <form onSubmit={handleSubmit} className="space-y-6">
                     {error && (
-                        <div className="p-4 bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-700 rounded-lg">
+                        <div className="p-4 ui-float--subtle border border-red-500/40 bg-red-500/10 rounded-lg">
                             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
                         </div>
                     )}

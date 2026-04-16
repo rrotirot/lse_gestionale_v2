@@ -36,11 +36,11 @@ export default function MembersFilters({
     };
 
     return (
-        <div className="relative" ref={dropdownRef}>
+        <div className="relative ui-float" ref={dropdownRef}>
             <button
                 type="button"
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="flex items-center gap-2 pl-10 pr-10 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent transition-all shadow-sm hover:shadow-md cursor-pointer min-w-[200px] text-left"
+                className="flex items-center gap-2 pl-10 pr-10 py-2.5 rounded-lg border border-white/10 bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/60 dark:focus:ring-blue-400/60 focus:border-transparent transition-all cursor-pointer min-w-[200px] text-left"
             >
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <svg className="w-5 h-5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -62,7 +62,7 @@ export default function MembersFilters({
 
             {/* Dropdown menu */}
             {isDropdownOpen && (
-                <div className="absolute z-50 mt-2 w-full rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-xl overflow-hidden transform transition-all duration-200 ease-out origin-top">
+                <div className="absolute z-50 mt-2 w-full rounded-lg ui-float border border-white/10 shadow-xl overflow-hidden transform transition-all duration-200 ease-out origin-top">
                     <div 
                         className="max-h-64 overflow-y-auto"
                         style={{
@@ -76,7 +76,7 @@ export default function MembersFilters({
                                 return (
                                     <div
                                         key={index}
-                                        className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400 font-medium text-center bg-gray-50 dark:bg-gray-700/50 border-t border-gray-200 dark:border-gray-600"
+                                        className="px-4 py-2 text-xs text-gray-300/80 font-medium text-center bg-white/5 border-t border-white/10"
                                     >
                                         {option.label}
                                     </div>
@@ -91,14 +91,14 @@ export default function MembersFilters({
                                     onClick={() => handleOptionSelect(option.value)}
                                     className={`w-full px-4 py-3 text-left text-sm transition-colors duration-150 ${
                                         isSelected
-                                            ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium'
-                                            : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                                            ? 'bg-blue-500/15 text-blue-200 font-medium'
+                                            : 'text-gray-100 hover:bg-white/5'
                                     } ${index === 0 ? 'rounded-t-lg' : ''} ${index === filterOptions.length - 1 ? 'rounded-b-lg' : ''}`}
                                 >
                                     <div className="flex items-center justify-between">
                                         <span>{option.label}</span>
                                         {isSelected && (
-                                            <svg className="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <svg className="w-5 h-5 text-blue-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                             </svg>
                                         )}

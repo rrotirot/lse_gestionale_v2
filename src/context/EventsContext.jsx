@@ -25,16 +25,16 @@ export function EventsProvider({ children }) {
         } finally {
             setLoading(false);
         }
-    });
+    }, []);
 
     // Carica eventi all'avvio
     useEffect(() => {
         loadEvents(); // subito, dà feedback veloce all'utente
 
-        const intervalId = setInterval(events, 5 * 60 * 1000);
+        const intervalId = setInterval(loadEvents, 5 * 60 * 1000);
 
         return () => clearInterval(intervalId);
-    }, []);
+    }, [loadEvents]);
 
     // Crea un nuovo evento
     const createEvent = useCallback(async (eventData) => {
@@ -66,7 +66,7 @@ export function EventsProvider({ children }) {
             console.error('Errore nell\'aggiornamento evento:', error);
             return { success: false, error: error.message || 'Errore di connessione' };
         }
-    });
+    }, []);
 
     // Elimina un evento
     const deleteEvent = useCallback(async (eventId) => {
@@ -78,7 +78,7 @@ export function EventsProvider({ children }) {
             console.error('Errore nell\'eliminazione evento:', error);
             return { success: false, error: error.message || 'Errore di connessione' };
         }
-    });
+    }, []);
 
     const value = {
         events,

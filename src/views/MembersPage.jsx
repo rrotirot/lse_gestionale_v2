@@ -20,10 +20,10 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { membersService } from '../services/membersService';
-
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+import { getApiBaseUrl, getStoredAuthToken } from '../lib/runtime-config';
 
 export default function MembersPage({ onNavigateToHome }) {
+    const rsiApiUrl = getApiBaseUrl();
     const { user, isUserVerified, logout, updateUser } = useAuth();
     const {
         members,
@@ -79,6 +79,7 @@ export default function MembersPage({ onNavigateToHome }) {
     });
     const [validatingAll, setValidatingAll] = useState(false);
     const [validationProgress, setValidationProgress] = useState({ current: 0, total: 0 });
+    const [validationEtaSeconds, setValidationEtaSeconds] = useState(null);
     const [showHelpModal, setShowHelpModal] = useState(false);
     const [showBackToTop, setShowBackToTop] = useState(false);
     const [checkingDb, setCheckingDb] = useState(false);
@@ -203,20 +204,36 @@ export default function MembersPage({ onNavigateToHome }) {
 
         setValidatingAll(true);
         setValidationProgress({ current: 0, total: membersToValidate.length });
+        setValidationEtaSeconds(null);
+
+        const t0 = Date.now();
+        const durationsMs = [];
 
         for (let i = 0; i < membersToValidate.length; i++) {
             const member = membersToValidate[i];
             setValidationProgress(prev => ({ ...prev, current: i + 1 }));
 
             try {
+                const start = Date.now();
                 await membersService.validateMember(member.key);
+                const end = Date.now();
+                durationsMs.push(end - start);
             } catch (err) {
                 console.error(`Errore nella validazione di ${member.name}:`, err);
+            }
+
+            // ETA: media mobile sui tempi già misurati
+            if (durationsMs.length > 0) {
+                const avgMs = durationsMs.reduce((a, b) => a + b, 0) / durationsMs.length;
+                const remaining = Math.max(0, membersToValidate.length - (i + 1));
+                const eta = Math.round((avgMs * remaining) / 1000);
+                setValidationEtaSeconds(eta);
             }
         }
 
         setValidatingAll(false);
         setValidationProgress({ current: 0, total: 0 });
+        setValidationEtaSeconds(null);
         setTimeout(() => refreshMembers(), 300);
     };
 
@@ -263,7 +280,7 @@ export default function MembersPage({ onNavigateToHome }) {
         }
         setResettingAllValidation(true);
         try {
-            const authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+            const authToken = getStoredAuthToken();
             const headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
@@ -372,6 +389,7 @@ export default function MembersPage({ onNavigateToHome }) {
                             onValidateAll={handleValidateAll}
                             validatingAll={validatingAll}
                             validationProgress={validationProgress}
+                            validationEtaSeconds={validationEtaSeconds}
                             checkingDb={checkingDb}
                             resettingAllValidation={resettingAllValidation}
                             disabled={loading}
@@ -517,7 +535,7 @@ export default function MembersPage({ onNavigateToHome }) {
                                                     method: 'POST',
                                                     headers: {
                                                         'Content-Type': 'application/json',
-                                                        'Authorization': `Bearer ${localStorage.getItem('authToken') || sessionStorage.getItem('authToken')}`
+                                                        'Authorization': `Bearer ${getStoredAuthToken()}`
                                                     },
                                                 });
 
@@ -544,7 +562,7 @@ export default function MembersPage({ onNavigateToHome }) {
                                                 alert(`Errore nel ripristino: ${error.message}`);
                                             }
                                         }}
-                                        authToken={localStorage.getItem('authToken') || sessionStorage.getItem('authToken')}
+                                        authToken={getStoredAuthToken()}
                                         onRefresh={refreshMembers}
                                     />
                                 ))}

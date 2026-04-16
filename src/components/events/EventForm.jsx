@@ -19,7 +19,7 @@ export default function EventForm({
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 bg-transparent ui-float">
                 <DialogHeader>
                     <DialogTitle>
                         {isEditing ? 'Modifica Evento' : 'Crea Nuovo Evento'}
@@ -40,7 +40,7 @@ export default function EventForm({
                             type="text"
                             value={eventData.title || ''}
                             onChange={(e) => onChange({ ...eventData, title: e.target.value })}
-                            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            className="w-full px-4 py-2 border border-white/10 rounded-lg focus:ring-2 focus:ring-blue-500/60 dark:focus:ring-blue-400/60 focus:border-transparent bg-transparent text-gray-900 dark:text-white"
                             placeholder="Titolo evento"
                             required
                             disabled={loading}
@@ -56,7 +56,7 @@ export default function EventForm({
                             type="date"
                             value={eventData.date || ''}
                             onChange={(e) => onChange({ ...eventData, date: e.target.value })}
-                            className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            className="w-full px-4 py-2 border border-white/10 rounded-lg focus:ring-2 focus:ring-blue-500/60 dark:focus:ring-blue-400/60 focus:border-transparent bg-transparent text-gray-900 dark:text-white"
                             required
                             disabled={loading}
                         />

@@ -1,13 +1,15 @@
+import { getApiBaseUrl } from "../lib/runtime-config";
+
 /**
  * Servizio per le chiamate API relative agli eventi
  */
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
 
 export const eventsService = {
     /**
      * Carica tutti gli eventi dal backend
      */
     async getAllEvents() {
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/events`);
         if (!response.ok) {
             throw new Error(`Errore nel caricamento eventi: ${response.status}`);
@@ -21,6 +23,7 @@ export const eventsService = {
      * Crea un nuovo evento
      */
     async createEvent(eventData) {
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/events`, {
             method: 'POST',
             headers: {
@@ -41,6 +44,7 @@ export const eventsService = {
      * Aggiorna un evento esistente
      */
     async updateEvent(eventId, eventData) {
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/events/${eventId}`, {
             method: 'PUT',
             headers: {
@@ -61,6 +65,7 @@ export const eventsService = {
      * Elimina un evento
      */
     async deleteEvent(eventId) {
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/events/${eventId}`, {
             method: 'DELETE',
         });

@@ -2,10 +2,10 @@ import React, { useState, useEffect } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { MembersProvider } from "./context/MembersContext";
 import { EventsProvider } from "./context/EventsContext";
-import LoginPage from "./pages/LoginPage";
-import HomePage from "./pages/HomePage";
-import CalendarPage from "./pages/CalendarPage";
-import MembersPage from "./pages/MembersPage";
+import LoginPage from "./views/LoginPage";
+import HomePage from "./views/HomePage";
+import CalendarPage from "./views/CalendarPage";
+import MembersPage from "./views/MembersPage";
 import ErrorBoundary from "./ErrorBoundary";
 
 // Componente interno che usa i Context

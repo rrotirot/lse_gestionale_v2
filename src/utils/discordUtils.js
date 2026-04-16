@@ -1,8 +1,9 @@
 /**
  * Utility per la gestione degli avatar Discord
  */
+import { getApiBaseUrl, getStoredAuthToken } from '../lib/runtime-config';
 
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+const rsiApiUrl = getApiBaseUrl();
 
 /**
  * Ottiene l'URL dell'avatar Discord dall'ID utente
@@ -36,26 +37,10 @@ export async function getDiscordAvatar(userId, discordBotToken) {
     }
 
     // Ottieni l'URL del backend
-    let apiUrl = rsiApiUrl;
-    if (!apiUrl) {
-        try {
-            if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_RSI_API_URL) {
-                apiUrl = import.meta.env.VITE_RSI_API_URL;
-            } else {
-                apiUrl = localStorage.getItem('rsi_api_url') || 'http://localhost:5000';
-            }
-        } catch {
-            apiUrl = 'http://localhost:5000';
-        }
-    }
+    const apiUrl = rsiApiUrl;
 
     // Ottieni il token di autenticazione
-    let authToken = null;
-    try {
-        authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
-    } catch {
-        // Ignora errori
-    }
+    const authToken = getStoredAuthToken();
 
     try {
         const response = await fetch(`${apiUrl}/api/v1/discord/avatar/${userId}`, {

@@ -8,6 +8,7 @@ export default function MembersActions({
     onValidateAll, 
     validatingAll = false, 
     validationProgress = { current: 0, total: 0 },
+    validationEtaSeconds = null,
     checkingDb = false,
     resettingAllValidation = false,
     disabled = false 
@@ -18,8 +19,17 @@ export default function MembersActions({
         ? Math.max(0, Math.min(100, Math.round((current / total) * 100)))
         : 0;
 
+    const formatEta = (secs) => {
+        if (!Number.isFinite(secs) || secs === null) return null;
+        const s = Math.max(0, Math.floor(secs));
+        const mm = String(Math.floor(s / 60)).padStart(2, '0');
+        const ss = String(s % 60).padStart(2, '0');
+        return `${mm}:${ss}`;
+    };
+    const etaLabel = formatEta(validationEtaSeconds);
+
     return (
-        <div className="flex items-center justify-end gap-2 flex-wrap">
+        <div className="flex items-center justify-end gap-2 flex-wrap ui-float--subtle px-2 py-2 rounded-xl border border-white/10">
             <Button
                 onClick={onAddMember}
                 disabled={disabled}
@@ -35,7 +45,7 @@ export default function MembersActions({
                 disabled={checkingDb || disabled}
                 variant="secondary"
                 size="lg"
-                className="h-10 px-3"
+                className="h-10 px-3 ui-float--subtle border border-white/10 bg-transparent hover:bg-white/5"
                 title="Controlla la presenza dei membri nel DB"
             >
                 {checkingDb ? (
@@ -55,7 +65,7 @@ export default function MembersActions({
                 disabled={resettingAllValidation || disabled}
                 variant="destructive"
                 size="lg"
-                className="h-10 px-3"
+                className="h-10 px-3 ui-float--subtle border border-white/10 bg-transparent hover:bg-white/5"
                 title="Resetta la validazione RSI per tutti i membri (temporaneo)"
             >
                 {resettingAllValidation ? (
@@ -73,7 +83,7 @@ export default function MembersActions({
             <Button
                 onClick={onValidateAll}
                 disabled={validatingAll || disabled}
-                className="relative overflow-hidden h-10 px-3 bg-blue-600 hover:bg-blue-700 text-white"
+                className="relative overflow-hidden h-10 px-3 ui-float--subtle border border-white/10 bg-transparent hover:bg-white/5 text-white"
                 title="Valida tutti i membri senza validazione"
             >
                 {validatingAll && (
@@ -100,7 +110,7 @@ export default function MembersActions({
                     <>
                         <span className="relative z-10 animate-spin">⏳</span>
                         <span className="relative z-10">
-                            Validazione... {current}/{total} ({progressPct}%)
+                            Validazione... {current}/{total} ({progressPct}%){etaLabel ? ` — ETA ${etaLabel}` : ''}
                         </span>
                     </>
                 ) : (

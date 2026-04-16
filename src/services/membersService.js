@@ -1,14 +1,15 @@
+import { getApiBaseUrl, getStoredAuthToken } from "../lib/runtime-config";
+
 /**
  * Servizio per le chiamate API relative ai membri
  */
-
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
 
 export const membersService = {
     /**
      * Carica tutti i membri dal backend
      */
     async getAllMembers() {
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/members`);
         if (!response.ok) {
             throw new Error(`Errore nel caricamento membri: ${response.status}`);
@@ -20,6 +21,7 @@ export const membersService = {
      * Carica i membri eliminati
      */
     async getDeletedMembers() {
+        const rsiApiUrl = getApiBaseUrl();
         const response = await fetch(`${rsiApiUrl}/api/v1/members/deleted`);
         if (!response.ok) {
             throw new Error(`Errore nel caricamento membri eliminati: ${response.status}`);
@@ -31,6 +33,7 @@ export const membersService = {
      * Aggiunge un nuovo membro
      */
     async addMember(member) {
+        const rsiApiUrl = getApiBaseUrl();
         // L'endpoint si aspetta un array di membri
         const response = await fetch(`${rsiApiUrl}/api/v1/members`, {
             method: 'POST',
@@ -52,17 +55,14 @@ export const membersService = {
      * Recupera il token di autenticazione
      */
     _getAuthToken() {
-        try {
-            return localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
-        } catch {
-            return null;
-        }
+        return getStoredAuthToken();
     },
 
     /**
      * Aggiorna un membro esistente
      */
     async updateMember(memberKey, memberData) {
+        const rsiApiUrl = getApiBaseUrl();
         const token = this._getAuthToken();
         const headers = {
             'Content-Type': 'application/json',
@@ -86,6 +86,7 @@ export const membersService = {
      * Elimina un membro
      */
     async deleteMember(memberKey, deletionReasons = []) {
+        const rsiApiUrl = getApiBaseUrl();
         const token = this._getAuthToken();
         const headers = {
             'Content-Type': 'application/json',
@@ -109,6 +110,7 @@ export const membersService = {
      * Valida un membro
      */
     async validateMember(memberKey) {
+        const rsiApiUrl = getApiBaseUrl();
         const token = this._getAuthToken();
         const headers = {
             'Content-Type': 'application/json',
@@ -133,6 +135,7 @@ export const membersService = {
      * Carica membri da file
      */
     async uploadMembersFile(file) {
+        const rsiApiUrl = getApiBaseUrl();
         const formData = new FormData();
         formData.append('file', file);
 

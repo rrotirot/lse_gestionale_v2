@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { authService } from '../services/authService';
+import { getApiBaseUrl, getStoredRememberMe } from '../lib/runtime-config';
 
 const AuthContext = createContext(null);
 
@@ -10,25 +11,16 @@ export function AuthProvider({ children }) {
     const [loading, setLoading] = useState(true);
     
     // URL del backend RSI proxy
-    const [rsiApiUrl] = useState(() => {
-        try {
-            if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_RSI_API_URL) {
-                return import.meta.env.VITE_RSI_API_URL;
-            }
-        } catch (e) {
-            // Ignora errori
-        }
-        try {
-            const saved = localStorage.getItem('rsi_api_url');
-            return saved || 'http://localhost:5000';
-        } catch {
-            return 'http://localhost:5000';
-        }
-    });
+    const [rsiApiUrl] = useState(() => getApiBaseUrl());
 
     // Verifica autenticazione all'avvio
     useEffect(() => {
-        const rememberMe = localStorage.getItem('rememberMe');
+        if (typeof window === 'undefined') {
+            setLoading(false);
+            return;
+        }
+
+        const rememberMe = getStoredRememberMe();
         let token = null;
         let savedUser = null;
         let storageType = null;
@@ -110,7 +102,7 @@ export function AuthProvider({ children }) {
 
     const login = useCallback(async (username, password, rememberMe = false) => {
         try {
-            const data = await authService.login(username, password, rsiApiUrl);
+            const data = await authService.login(username, password);
             if (data.success && data.token && data.user) {
                 const token = data.token;
                 const userData = data.user;
@@ -143,6 +135,10 @@ export function AuthProvider({ children }) {
          console.log(`🚪 Logout effettuato da: ${username}`);
         
         try {
+            if (typeof window === 'undefined') {
+                return;
+            }
+
             const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
             if (token && rsiApiUrl) {
                 await fetch(`${rsiApiUrl}/api/v1/auth/logout`, {
@@ -173,6 +169,10 @@ export function AuthProvider({ children }) {
 
     const updateUser = useCallback((updatedUser) => {
         setUser(updatedUser);
+        if (typeof window === 'undefined') {
+            return;
+        }
+
         const rememberMe = localStorage.getItem('rememberMe');
         if (rememberMe === 'true') {
             localStorage.setItem('user', JSON.stringify(updatedUser));

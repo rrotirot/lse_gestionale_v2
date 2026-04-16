@@ -2,9 +2,10 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import { useMemberFilters } from '../hooks/useMemberFilters';
 import { membersService } from '../services/membersService';
 import { useAuth } from '../hooks/useAuth';
+import { getApiBaseUrl } from '../lib/runtime-config';
 
 const MembersContext = createContext(null);
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+const rsiApiUrl = getApiBaseUrl();
 
 export function MembersProvider({ children }) {
     const { authToken } = useAuth();
@@ -20,13 +21,9 @@ export function MembersProvider({ children }) {
     // Bot token Discord
     const [discordBotToken] = useState(() => {
         try {
-            if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_DISCORD_BOT_TOKEN) {
-                return import.meta.env.VITE_DISCORD_BOT_TOKEN;
+            if (typeof window === 'undefined') {
+                return null;
             }
-        } catch (e) {
-            // Ignora errori
-        }
-        try {
             const saved = localStorage.getItem('discord_bot_token');
             return saved || null;
         } catch {

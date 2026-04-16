@@ -68,7 +68,7 @@ export default function MemberCard({ member, onSelect, discordBotToken }) {
     return (
         <article
             onClick={() => onSelect(member)}
-            className={`cursor-pointer rounded-lg p-3 shadow-sm hover:shadow-md transition relative overflow-hidden border-2 ${borderColor} ${bgColor}`}
+            className={`cursor-pointer ui-float rounded-lg p-3 transition relative overflow-hidden border-2 ${borderColor} ${bgColor}`}
         >
             {!!member.note && String(member.note).trim() !== '' && (
                 <div

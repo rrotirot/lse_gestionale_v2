@@ -7,8 +7,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+import { getApiBaseUrl, getStoredAuthToken } from '../../lib/runtime-config';
 
 export default function Header({ 
     user, 
@@ -26,6 +25,7 @@ export default function Header({
     // Props per aggiornamento utente
     onUpdateUser
 }) {
+    const rsiApiUrl = getApiBaseUrl();
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
     const [showEditUsernameModal, setShowEditUsernameModal] = useState(false);
@@ -75,7 +75,7 @@ export default function Header({
         try {
             setError('');
             // Controlla sia localStorage che sessionStorage per il token
-            const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+            const token = getStoredAuthToken();
             
             console.log('🔐 Tentativo generazione codice di verifica');
             console.log('🎫 Token trovato:', !!token);
@@ -162,7 +162,7 @@ export default function Header({
             } else {
                 setIsVerified(false);
                 // Verifica che ci sia un token prima di generare il codice
-                const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+                const token = getStoredAuthToken();
                 if (token) {
                     console.log('🔄 Generazione automatica codice di verifica all\'apertura del modal');
                     generateVerificationCode();
@@ -192,7 +192,7 @@ export default function Header({
         setVerificationMessage('');
 
         try {
-            const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+            const token = getStoredAuthToken();
             const response = await fetch(`${rsiApiUrl}/api/v1/auth/verify-rsi-code`, {
                 method: 'POST',
                 headers: {
@@ -281,7 +281,7 @@ export default function Header({
         setError('');
 
         try {
-            const token = localStorage.getItem('authToken');
+            const token = getStoredAuthToken();
             const response = await fetch(`${rsiApiUrl}/api/v1/auth/profile`, {
                 method: 'PUT',
                 headers: {
@@ -350,7 +350,7 @@ export default function Header({
         setPasswordSuccess('');
 
         try {
-            const token = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+            const token = getStoredAuthToken();
             const response = await fetch(`${rsiApiUrl}/api/v1/auth/change-password`, {
                 method: 'PUT',
                 headers: {

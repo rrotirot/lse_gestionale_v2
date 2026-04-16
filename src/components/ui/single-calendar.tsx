@@ -8,9 +8,9 @@ import { buttonVariants } from "@/components/ui/button";
 
 import { cn } from "@/lib/utils";
 
-import type { DayPickerSingleProps } from "react-day-picker";
+type IconProps = React.ComponentProps<"svg">;
 
-function SingleCalendar({ className, classNames, showOutsideDays = true, selected, ...props }: DayPickerSingleProps) {
+function SingleCalendar({ className, classNames, showOutsideDays = true, selected, ...props }: any) {
   const [currentMonth, setCurrentMonth] = React.useState<Date | undefined>(selected instanceof Date ? selected : undefined);
 
   return (
@@ -49,9 +49,9 @@ function SingleCalendar({ className, classNames, showOutsideDays = true, selecte
         ...classNames,
       }}
       components={{
-        IconLeft: ({ className, ...props }) => <ChevronLeft className={cn("h-4 w-4", className)} {...props} />,
-        IconRight: ({ className, ...props }) => <ChevronRight className={cn("h-4 w-4", className)} {...props} />,
-      }}
+        IconLeft: ({ className, ...props }: IconProps) => <ChevronLeft className={cn("h-4 w-4", className)} {...props} />,
+        IconRight: ({ className, ...props }: IconProps) => <ChevronRight className={cn("h-4 w-4", className)} {...props} />,
+      } as any}
       {...props}
     />
   );

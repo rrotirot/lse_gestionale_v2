@@ -16,7 +16,7 @@ export default function DeletedMemberItem({ member, discordBotToken, onRestore, 
     return (
         <div
             key={member._id || member.key}
-            className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            className="p-4 rounded-lg ui-float border border-white/10 bg-transparent hover:bg-white/5 transition-colors"
         >
             <div className="flex items-start justify-between">
                 <div className="flex-1">

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getApiBaseUrl } from '../lib/runtime-config';
 
 export const usePromotedMembers = () => {
     const [promotedMembers, setPromotedMembers] = useState([]);
@@ -8,7 +9,7 @@ export const usePromotedMembers = () => {
     const fetchPromotedMembers = async () => {
         try {
             setLoading(true);
-            const response = await fetch('/api/v1/promoted-members');
+            const response = await fetch(`${getApiBaseUrl()}/api/v1/promoted-members`);
             const data = await response.json();
 
             if (data.success) {
@@ -26,7 +27,7 @@ export const usePromotedMembers = () => {
 
     const updatePromotedMember = async (key, updates) => {
         try {
-            const response = await fetch(`/api/v1/promoted-members/${key}`, {
+            const response = await fetch(`${getApiBaseUrl()}/api/v1/promoted-members/${key}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
@@ -55,7 +56,7 @@ export const usePromotedMembers = () => {
 
     const deletePromotedMember = async (key, deletionReasons = []) => {
         try {
-            const response = await fetch(`/api/v1/promoted-members/${key}`, {
+            const response = await fetch(`${getApiBaseUrl()}/api/v1/promoted-members/${key}`, {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json',

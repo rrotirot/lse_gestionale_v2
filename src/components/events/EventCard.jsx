@@ -23,10 +23,10 @@ export default function EventCard({
 
     return (
         <div
-            className={`p-5 rounded-lg border transition-all hover:shadow-md w-auto max-w-[580px] ${
+            className={`ui-float p-5 rounded-lg border transition-all w-auto max-w-[580px] ${
                 isPast
-                    ? 'bg-gray-50 dark:bg-gray-900/50 border-gray-300 dark:border-gray-700'
-                    : 'bg-gradient-to-br from-blue-600 to-blue-800 dark:from-blue-700 dark:to-blue-900 border-blue-500 dark:border-blue-600'
+                    ? 'border-white/10 bg-white/5'
+                    : 'border-blue-500/30 bg-blue-500/10'
             }`}
         >
             <div className="flex items-start justify-between gap-3 mb-3 w-full">

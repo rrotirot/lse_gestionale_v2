@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { membersService } from '../services/membersService';
-
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+import { getApiBaseUrl, getStoredAuthToken } from '../lib/runtime-config';
 
 /**
  * Hook personalizzato per gestire i dettagli di un membro
@@ -201,16 +200,11 @@ export function useMemberDetail(selectedMember, onMemberUpdate, deleteMemberFunc
 
     // Funzione per resettare la validazione
     const resetValidation = useCallback(async () => {
+        const rsiApiUrl = getApiBaseUrl();
         if (!selectedMember || !rsiApiUrl) return;
 
         try {
-            // Recupera il token di autenticazione
-            let authToken = null;
-            try {
-                authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
-            } catch {
-                // Ignora errori
-            }
+            const authToken = getStoredAuthToken();
 
             const headers = {
                 'Content-Type': 'application/json',

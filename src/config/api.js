@@ -1,6 +1,7 @@
+import { getApiBaseUrl } from "../lib/runtime-config";
+
 // API Configuration
 export const API_CONFIG = {
-    BASE_URL: import.meta.env.VITE_RSI_API_URL || 'http://localhost:5000',
     ENDPOINTS: {
         HEALTH: '/api/v1/health',
         MEMBERS: '/api/v1/members',
@@ -17,7 +18,7 @@ export const API_CONFIG = {
 
 // Helper function to build full API URLs
 export const getApiUrl = (endpoint) => {
-    return `${API_CONFIG.BASE_URL}${endpoint}`;
+    return `${getApiBaseUrl()}${endpoint}`;
 };
 
 // Helper function for API requests

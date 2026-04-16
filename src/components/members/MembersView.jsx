@@ -3,8 +3,7 @@ import { useMembers } from '../../hooks/useMembers';
 import MemberList from './MemberList';
 import AddMemberModal from './AddMemberModal';
 import { membersService } from '../../services/membersService';
-
-const rsiApiUrl = import.meta.env.VITE_RSI_API_URL
+import { getApiBaseUrl } from '../../lib/runtime-config';
 
 export default function MembersView({ 
     discordBotToken,
@@ -13,6 +12,7 @@ export default function MembersView({
     filtered = [],
     onRefresh
 }) {
+    const rsiApiUrl = getApiBaseUrl();
     const { loading, error, addMember } = useMembers();
 
     const [showAddMemberModal, setShowAddMemberModal] = useState(false);
