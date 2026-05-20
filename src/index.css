@@ -123,8 +123,10 @@ body {
 }
 
 /* Floating UI: no hard borders, only soft fades */
-.ui-float {
+.ui-float:not(.fixed):not(.absolute) {
   position: relative;
+}
+.ui-float {
   border-radius: 0.85rem;
   border: 1px solid transparent;
   background-image:
@@ -156,8 +158,10 @@ body {
   opacity: 0.65;
 }
 
-.ui-float--subtle {
+.ui-float--subtle:not(.fixed):not(.absolute) {
   position: relative;
+}
+.ui-float--subtle {
   border-radius: 0.85rem;
   border: 1px solid transparent;
   background-image:

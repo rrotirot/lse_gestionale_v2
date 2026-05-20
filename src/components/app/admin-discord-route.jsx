@@ -7,13 +7,17 @@ import AdminDiscordPage from "@/views/AdminDiscordPage";
 
 export default function AdminDiscordRoute() {
   const router = useRouter();
-  const { isAuthenticated, loading, user, logout, updateUser } = useAuth();
+  const { isAuthenticated, loading, user, logout, updateUser, isUserVerified } = useAuth();
 
   useEffect(() => {
-    if (!loading && !isAuthenticated) {
-      router.replace("/login");
+    if (!loading) {
+      if (!isAuthenticated) {
+        router.replace("/login");
+      } else if (!isUserVerified()) {
+        router.replace("/");
+      }
     }
-  }, [isAuthenticated, loading, router]);
+  }, [isAuthenticated, loading, isUserVerified, router]);
 
   if (loading) {
     return (
@@ -26,7 +30,7 @@ export default function AdminDiscordRoute() {
     );
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !isUserVerified()) {
     return null;
   }
 

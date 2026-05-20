@@ -19,9 +19,42 @@ function pickName(discordMember, nameSource) {
     return discordMember.user?.username || '';
 }
 
+function determineTag(discordMember, defaultTag) {
+    if (!discordMember || !discordMember.roles || !discordMember.roles.cache) {
+        return defaultTag;
+    }
+
+    // Controlla se l'utente ha il ruolo "OPERATORE"
+    const hasOperatoreRole = discordMember.roles.cache.some(
+        role => role.name && role.name.toUpperCase() === 'OPERATORE'
+    );
+    if (hasOperatoreRole) {
+        return 'OPERATORE';
+    }
+
+    // Controlla se l'utente ha il ruolo "P-LSE" o "LSE-P"
+    const hasLsePRole = discordMember.roles.cache.some(
+        role => role.name && (role.name.toUpperCase() === 'P-LSE' || role.name.toUpperCase() === 'LSE-P')
+    );
+    if (hasLsePRole) {
+        return 'LSE-P';
+    }
+
+    // Controlla se l'utente ha il ruolo "LSE"
+    const hasLseRole = discordMember.roles.cache.some(
+        role => role.name && role.name.toUpperCase() === 'LSE'
+    );
+    if (hasLseRole) {
+        return 'LSE';
+    }
+
+    return defaultTag;
+}
+
 function buildMemberDoc(discordMember, options = {}) {
-    const tag = options.defaultTag || DEFAULT_TAG;
+    const defaultTag = options.defaultTag || DEFAULT_TAG;
     const nameSource = options.nameSource || DEFAULT_NAME_SOURCE;
+    const tag = determineTag(discordMember, defaultTag);
 
     return {
         name: pickName(discordMember, nameSource),

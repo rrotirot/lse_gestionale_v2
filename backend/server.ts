@@ -15,6 +15,7 @@ const Member = require('./models/Member');
 const DeletedMember = require('./models/DeletedMember');
 const User = require('./models/User');
 const Event = require('./models/Event');
+const discordBot = require('./scripts/discord-bot');
 const jwt = require('jsonwebtoken');
 const { logger, requestLogger } = require('./lib/logger');
 const cache = require('./lib/cache');
@@ -2408,6 +2409,90 @@ app.delete('/api/v1/members/:key', strictLimiter, checkMongoConnection, authenti
     }
 });
 
+// Endpoint per recuperare tutti i membri eliminati
+app.get('/api/v1/deleted-members', checkMongoConnection, async (req, res) => {
+    try {
+        const deletedMembers = await DeletedMember.find({}).sort({ deletedAt: -1 }).lean();
+        
+        return res.json({
+            success: true,
+            deletedMembers: deletedMembers
+        });
+    } catch (error: any) {
+        console.error('Errore nel recupero dei membri eliminati:', error);
+        return res.status(500).json({
+            success: false,
+            error: error?.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Endpoint per ripristinare un membro eliminato
+app.post('/api/v1/deleted-members/:key/restore', checkMongoConnection, async (req, res) => {
+    try {
+        const { key } = req.params;
+        const numericKey = parseInt(key, 10);
+        
+        if (!Number.isFinite(numericKey)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Key non valida'
+            });
+        }
+
+        // Trova il membro nei membri eliminati
+        const deletedMember = await DeletedMember.findOne({ key: numericKey });
+        
+        if (!deletedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro eliminato non trovato'
+            });
+        }
+        
+        // Controlla se esiste già un membro attivo con la stessa key
+        const existingMember = await Member.findOne({ key: numericKey });
+        if (existingMember) {
+            return res.status(400).json({
+                success: false,
+                error: 'Un membro attivo con questa chiave esiste già'
+            });
+        }
+        
+        // Ripristina il membro nel DB principale
+        const memberData = deletedMember.toObject();
+        delete memberData._id;
+        delete memberData.deletedAt;
+        delete memberData.deletedBy;
+        delete memberData.deletionReasons;
+        delete memberData.originalCreatedAt;
+        delete memberData.originalUpdatedAt;
+        delete memberData.__v;
+        
+        // Se c'erano createdAt e updatedAt originali, ripristinali
+        if (deletedMember.originalCreatedAt) memberData.createdAt = deletedMember.originalCreatedAt;
+        if (deletedMember.originalUpdatedAt) memberData.updatedAt = deletedMember.originalUpdatedAt;
+        
+        const restoredMember = new Member(memberData);
+        await restoredMember.save();
+        
+        // Rimuovilo dai deleted-members
+        await DeletedMember.findOneAndDelete({ key: numericKey });
+        
+        return res.json({
+            success: true,
+            message: 'Membro ripristinato con successo',
+            member: restoredMember
+        });
+    } catch (error: any) {
+        console.error('Errore nel ripristino del membro eliminato:', error);
+        return res.status(500).json({
+            success: false,
+            error: error?.message || 'Errore interno del server'
+        });
+    }
+});
+
 // Endpoint per aggiornare un singolo membro
 app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
     try {
@@ -2477,7 +2562,1181 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
     }
 });
 
+// ==================== ENDPOINT EVENTI ====================
+// Compatibili per integrazione con bot Discord
 
+/**
+ * Helper function per inviare notifiche Discord via webhook
+ * @param {any} event - L'evento da notificare
+ * @param {string} action - 'created', 'updated', 'deleted'
+ */
+async function notifyDiscordWebhook(event: any, action: string) {
+    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+    if (!webhookUrl) {
+        return; // Nessun webhook configurato, ignora silenziosamente
+    }
+
+    try {
+        const actionMessages: Record<string, string> = {
+            'created': '📅 Nuovo evento creato',
+            'updated': '✏️ Evento modificato',
+            'deleted': '🗑️ Evento eliminato'
+        };
+
+        const colors: Record<string, number> = {
+            'created': 0x00ff00, // Verde
+            'updated': 0x0099ff, // Blu
+            'deleted': 0xff0000  // Rosso
+        };
+
+        const eventDate = new Date(event.date);
+        const embed: any = {
+            title: actionMessages[action] || 'Evento aggiornato',
+            description: `**${event.title}**`,
+            color: colors[action] || 0x0099ff,
+            fields: [
+                {
+                    name: '📆 Data',
+                    value: eventDate.toLocaleDateString('it-IT', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    }),
+                    inline: true
+                },
+                {
+                    name: '🏷️ Tipo',
+                    value: event.type || 'evento',
+                    inline: true
+                }
+            ],
+            timestamp: new Date().toISOString()
+        };
+
+        if (event.startTime || event.endTime) {
+            embed.fields.push({
+                name: '⏰ Orario',
+                value: `${event.startTime || ''}${event.startTime && event.endTime ? ' - ' : ''}${event.endTime || ''}`,
+                inline: true
+            });
+        }
+
+        if (event.location) {
+            embed.fields.push({
+                name: '📍 Location',
+                value: event.location,
+                inline: false
+            });
+        }
+
+        if (event.description) {
+            embed.fields.push({
+                name: '📝 Descrizione',
+                value: event.description.substring(0, 1024), // Limite Discord
+                inline: false
+            });
+        }
+
+        await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                embeds: [embed]
+            })
+        });
+    } catch (error) {
+        console.error('❌ Errore nell\'invio webhook Discord:', error);
+        // Non bloccare l'operazione se il webhook fallisce
+    }
+}
+
+// GET /api/events - Ottieni tutti gli eventi (con filtri opzionali per bot Discord)
+app.get('/api/v1/events', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { 
+            upcoming,      // Solo eventi futuri
+            type,          // Filtra per tipo
+            from,          // Data inizio (YYYY-MM-DD)
+            to,            // Data fine (YYYY-MM-DD)
+            limit          // Limita il numero di risultati
+        } = req.query;
+
+        let query: any = {};
+
+        // Filtro per eventi futuri
+        if (upcoming === 'true') {
+            query.date = { $gte: new Date() };
+        }
+
+        // Filtro per tipo
+        if (type) {
+            query.type = type;
+        }
+
+        // Filtro per range di date
+        if (from || to) {
+            query.date = query.date || {};
+            if (from) {
+                query.date.$gte = new Date(from as string);
+            }
+            if (to) {
+                query.date.$lte = new Date(to as string);
+            }
+        }
+
+        let queryBuilder = Event.find(query).sort({ date: 1 });
+
+        // Limita i risultati se richiesto
+        if (limit) {
+            queryBuilder = queryBuilder.limit(parseInt(limit as string));
+        }
+
+        const events = await queryBuilder.lean();
+        
+        res.json({
+            success: true,
+            count: events.length,
+            events: events
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero eventi:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nel recupero eventi' 
+        });
+    }
+});
+
+// GET /api/events/:id - Ottieni un singolo evento (utile per bot Discord)
+app.get('/api/v1/events/:id', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { id } = req.params;
+
+        // Verifica che l'ID sia valido per MongoDB
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+
+        const event = await Event.findById(id).lean();
+
+        if (!event) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Evento non trovato' 
+            });
+        }
+
+        res.json({
+            success: true,
+            event: event
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero evento:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nel recupero evento' 
+        });
+    }
+});
+
+// POST /api/events - Crea un nuovo evento (compatibile con bot Discord)
+app.post('/api/v1/events', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { title, description, date, startTime, endTime, location, type, createdBy, notifyDiscord } = req.body;
+
+        // Validazione
+        if (!title || !date) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Titolo e data sono obbligatori' 
+            });
+        }
+
+        // Crea nuovo evento
+        // Gestisci la data evitando problemi di fuso orario
+        // Se la data è in formato YYYY-MM-DD, crea la data usando i componenti
+        let eventDate;
+        if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            // Formato YYYY-MM-DD: crea data locale a mezzanotte
+            const [year, month, day] = date.split('-').map(Number);
+            eventDate = new Date(year, month - 1, day);
+        } else {
+            eventDate = new Date(date);
+        }
+
+        const event = new Event({
+            title,
+            description: description || '',
+            date: eventDate,
+            startTime: startTime || '',
+            endTime: endTime || '',
+            location: location || '',
+            type: type || 'evento',
+            createdBy: createdBy || 'system'
+        });
+
+        const savedEvent = await event.save();
+
+        // Notifica Discord se richiesto (default: true)
+        if (notifyDiscord !== false) {
+            await notifyDiscordWebhook(savedEvent.toObject(), 'created');
+        }
+
+        res.status(201).json({
+            success: true,
+            event: savedEvent
+        });
+    } catch (error: any) {
+        console.error('❌ Errore nella creazione evento:', error);
+        // Se è un errore di validazione Mongoose, fornisci dettagli
+        if (error.name === 'ValidationError') {
+            const errors = Object.values(error.errors).map((e: any) => e.message).join(', ');
+            return res.status(400).json({ 
+                success: false,
+                error: `Errore di validazione: ${errors}` 
+            });
+        }
+        res.status(500).json({ 
+            success: false,
+            error: error.message || 'Errore nella creazione evento' 
+        });
+    }
+});
+
+// PUT /api/events/:id - Modifica un evento esistente (compatibile con bot Discord)
+app.put('/api/v1/events/:id', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { id } = req.params;
+        const { title, description, date, startTime, endTime, location, type, notifyDiscord } = req.body;
+
+        console.log(`📝 Tentativo di modifica evento con ID: ${id}`);
+
+        // Validazione
+        if (!title || !date) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Titolo e data sono obbligatori' 
+            });
+        }
+
+        // Verifica che l'ID sia valido per MongoDB
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            console.error(`❌ ID non valido: ${id}`);
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+
+        // Aggiorna evento
+        // Gestisci la data evitando problemi di fuso orario
+        let eventDate;
+        if (typeof date === 'string' && date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            // Formato YYYY-MM-DD: crea data locale a mezzanotte
+            const [year, month, day] = date.split('-').map(Number);
+            eventDate = new Date(year, month - 1, day);
+        } else {
+            eventDate = new Date(date);
+        }
+
+        const event = await Event.findByIdAndUpdate(
+            id,
+            {
+                title,
+                description: description || '',
+                date: eventDate,
+                startTime: startTime || '',
+                endTime: endTime || '',
+                location: location || '',
+                type: type || 'evento',
+                updatedAt: new Date()
+            },
+            { new: true, runValidators: true }
+        );
+
+        if (!event) {
+            console.error(`❌ Evento con ID ${id} non trovato nel database`);
+            return res.status(404).json({ 
+                success: false,
+                error: 'Evento non trovato' 
+            });
+        }
+
+        // Notifica Discord se richiesto (default: true)
+        if (notifyDiscord !== false) {
+            await notifyDiscordWebhook(event.toObject(), 'updated');
+        }
+
+        console.log(`✅ Evento ${id} modificato con successo`);
+        res.json({
+            success: true,
+            event: event
+        });
+    } catch (error: any) {
+        console.error('❌ Errore nella modifica evento:', error);
+        if (error.name === 'CastError') {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nella modifica evento' 
+        });
+    }
+});
+
+// DELETE /api/events/:id - Elimina un evento (compatibile con bot Discord)
+app.delete('/api/v1/events/:id', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { id } = req.params;
+        const { notifyDiscord } = req.query; // Per DELETE, usa query params
+
+        // Verifica che l'ID sia valido per MongoDB
+        if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'ID evento non valido' 
+            });
+        }
+
+        // Recupera l'evento prima di eliminarlo per la notifica
+        const eventToDelete = await Event.findById(id).lean();
+
+        if (!eventToDelete) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Evento non trovato' 
+            });
+        }
+
+        // Elimina l'evento
+        await Event.findByIdAndDelete(id);
+
+        // Notifica Discord se richiesto (default: true)
+        if (notifyDiscord !== 'false') {
+            await notifyDiscordWebhook(eventToDelete, 'deleted');
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Evento eliminato con successo' 
+        });
+    } catch (error) {
+        console.error('❌ Errore nell\'eliminazione evento:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Errore nell\'eliminazione evento' 
+        });
+    }
+});
+
+// ==================== API DI SINCRONIZZAZIONE PER BOT DISCORD ====================
+
+// GET /api/sync/members - Sincronizza membri (bot -> web app e viceversa)
+app.get('/api/v1/sync/members', checkMongoConnection, authenticateAPI, async (req: any, res: any) => {
+    try {
+        const { 
+            since,      // Timestamp per sincronizzazione incrementale (ISO string o timestamp)
+            tag,        // Filtra per tag specifico
+            limit       // Limita risultati
+        } = req.query;
+
+        let query: any = {};
+
+        // Filtro per sincronizzazione incrementale
+        if (since) {
+            const sinceDate = new Date(since as string);
+            query.updatedAt = { $gte: sinceDate };
+        }
+
+        // Filtro per tag
+        if (tag) {
+            query.tag = tag;
+        }
+
+        let queryBuilder = Member.find(query).sort({ updatedAt: -1 });
+
+        if (limit) {
+            queryBuilder = queryBuilder.limit(parseInt(limit as string));
+        }
+
+        const members = await queryBuilder.lean();
+
+        res.json({
+            success: true,
+            count: members.length,
+            timestamp: new Date().toISOString(),
+            members: members.map((m: any) => ({
+                key: m.key,
+                name: m.name,
+                id: m.id,
+                tag: m.tag,
+                index: m.index,
+                date: m.date,
+                idoneita: m.idoneita,
+                watchdog: m.watchdog,
+                promoted: m.promoted,
+                affiliazioniOrg: m.affiliazioniOrg,
+                orgValidation: m.orgValidation,
+                note: m.note,
+                createdAt: m.createdAt,
+                updatedAt: m.updatedAt
+            }))
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione membri:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione membri'
+        });
+    }
+});
+
+// POST /api/sync/members - Sincronizza membri dal bot (bulk update)
+app.post('/api/v1/sync/members', checkMongoConnection, authenticateAPI, async (req: any, res: any) => {
+    try {
+        const { members } = req.body;
+
+        if (!Array.isArray(members) || members.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di membri richiesto'
+            });
+        }
+
+        const operations = members.map(member => ({
+            updateOne: {
+                filter: { key: member.key },
+                update: {
+                    $set: {
+                        ...member,
+                        updatedAt: new Date()
+                    }
+                },
+                upsert: true
+            }
+        }));
+
+        const result = await Member.bulkWrite(operations);
+
+        console.log(`🔄 Sincronizzazione membri completata: ${result.upsertedCount} inseriti, ${result.modifiedCount} aggiornati`);
+
+        res.json({
+            success: true,
+            message: 'Sincronizzazione completata',
+            inserted: result.upsertedCount,
+            updated: result.modifiedCount,
+            total: members.length
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione membri:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione membri'
+        });
+    }
+});
+
+// GET /api/sync/events - Sincronizza eventi (bot -> web app e viceversa)
+app.get('/api/v1/sync/events', checkMongoConnection, authenticateAPI, async (req: any, res: any) => {
+    try {
+        const { 
+            since,      // Timestamp per sincronizzazione incrementale
+            upcoming,   // Solo eventi futuri
+            type,       // Filtra per tipo
+            limit       // Limita risultati
+        } = req.query;
+
+        let query: any = {};
+
+        if (since) {
+            const sinceDate = new Date(since as string);
+            query.updatedAt = { $gte: sinceDate };
+        }
+
+        if (upcoming === 'true') {
+            query.date = { ...query.date, $gte: new Date() };
+        }
+
+        if (type) {
+            query.type = type;
+        }
+
+        let queryBuilder = Event.find(query).sort({ date: 1 });
+
+        if (limit) {
+            queryBuilder = queryBuilder.limit(parseInt(limit as string));
+        }
+
+        const events = await queryBuilder.lean();
+
+        res.json({
+            success: true,
+            count: events.length,
+            timestamp: new Date().toISOString(),
+            events: events
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione eventi:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione eventi'
+        });
+    }
+});
+
+// POST /api/sync/events - Sincronizza eventi dal bot (bulk update)
+app.post('/api/v1/sync/events', checkMongoConnection, authenticateAPI, async (req: any, res: any) => {
+    try {
+        const { events } = req.body;
+
+        if (!Array.isArray(events) || events.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di eventi richiesto'
+            });
+        }
+
+        const operations = events.map(event => ({
+            updateOne: {
+                filter: { _id: event._id || event.id },
+                update: {
+                    $set: {
+                        title: event.title,
+                        description: event.description || '',
+                        date: new Date(event.date),
+                        startTime: event.startTime || '',
+                        endTime: event.endTime || '',
+                        location: event.location || '',
+                        type: event.type || 'evento',
+                        updatedAt: new Date()
+                    }
+                },
+                upsert: false // Non creare nuovi eventi, solo aggiorna esistenti
+            }
+        }));
+
+        const result = await Event.bulkWrite(operations);
+
+        console.log(`🔄 Sincronizzazione eventi completata: ${result.modifiedCount} aggiornati`);
+
+        res.json({
+            success: true,
+            message: 'Sincronizzazione completata',
+            updated: result.modifiedCount,
+            total: events.length
+        });
+    } catch (error) {
+        console.error('❌ Errore nella sincronizzazione eventi:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nella sincronizzazione eventi'
+        });
+    }
+});
+
+// POST /api/import/bot-events - Importa eventi dal formato del bot Discord (da CSV/JSON)
+app.post('/api/v1/import/bot-events', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { activities } = req.body; // Array di attività dal bot
+
+        if (!Array.isArray(activities) || activities.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Array di attività richiesto'
+            });
+        }
+
+        const imported: any[] = [];
+        const errors: any[] = [];
+
+        for (const activity of activities) {
+            try {
+                // Converti il formato del bot al formato del sistema
+                let scheduledTime = activity.scheduled_start_time_iso || activity.datetime_input;
+                if (!scheduledTime) {
+                    errors.push({
+                        activity: activity.id || activity.title,
+                        error: 'Data non trovata'
+                    });
+                    continue;
+                }
+
+                // Se la data è nel formato "DD/MM/YYYY HH:mm", convertila in ISO
+                if (typeof scheduledTime === 'string' && scheduledTime.match(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/)) {
+                    const [datePart, timePart] = scheduledTime.split(' ');
+                    const [day, month, year] = datePart.split('/').map(Number);
+                    const [hours, minutes] = timePart.split(':').map(Number);
+                    scheduledTime = new Date(Date.UTC(year, month - 1, day, hours, minutes)).toISOString();
+                }
+
+                const eventDate = new Date(scheduledTime);
+                if (isNaN(eventDate.getTime())) {
+                    errors.push({
+                        activity: activity.id || activity.title,
+                        error: 'Data non valida'
+                    });
+                    continue;
+                }
+
+                const hours = eventDate.getHours().toString().padStart(2, '0');
+                const minutes = eventDate.getMinutes().toString().padStart(2, '0');
+                const startTime = `${hours}:${minutes}`;
+
+                let eventType = 'evento';
+                try {
+                    if (activity.config_json) {
+                        const config = typeof activity.config_json === 'string' 
+                            ? JSON.parse(activity.config_json) 
+                            : activity.config_json;
+                        if (config.type === 'activity') {
+                            eventType = 'attività';
+                        }
+                    }
+                } catch (e) {
+                    // Ignora
+                }
+
+                // Cerca se esiste già un evento con lo stesso titolo e data
+                const existingEvent = await Event.findOne({
+                    title: activity.title,
+                    date: {
+                        $gte: new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate()),
+                        $lt: new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate() + 1)
+                    }
+                });
+
+                if (existingEvent) {
+                    existingEvent.description = activity.description || existingEvent.description;
+                    existingEvent.location = activity.location || existingEvent.location;
+                    existingEvent.startTime = startTime;
+                    existingEvent.type = eventType;
+                    await existingEvent.save();
+                    imported.push({ id: existingEvent._id, action: 'updated', title: activity.title });
+                } else {
+                    const newEvent = new Event({
+                        title: activity.title,
+                        description: activity.description || '',
+                        date: eventDate,
+                        startTime: startTime,
+                        endTime: '',
+                        location: activity.location || '',
+                        type: eventType,
+                        createdBy: activity.creator_id || 'discord-bot'
+                    });
+                    const savedEvent = await newEvent.save();
+                    imported.push({ id: savedEvent._id, action: 'created', title: activity.title });
+                }
+            } catch (error: any) {
+                console.error(`❌ Errore nell'importazione attività ${activity.id || activity.title}:`, error);
+                errors.push({
+                    activity: activity.id || activity.title,
+                    error: error.message
+                });
+            }
+        }
+
+        console.log(`📥 Importazione eventi completata: ${imported.length} importati, ${errors.length} errori`);
+
+        res.json({
+            success: true,
+            message: `Importazione completata: ${imported.length} eventi importati`,
+            imported: imported.length,
+            errors: errors.length,
+            details: {
+                imported,
+                errors: errors.length > 0 ? errors : undefined
+            }
+        });
+    } catch (error: any) {
+        console.error('❌ Errore nell\'importazione eventi:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Errore nell\'importazione eventi'
+        });
+    }
+});
+
+// GET /api/discord/avatar/:userId - Ottiene l'avatar Discord di un utente
+app.get('/api/v1/discord/avatar/:userId', checkMongoConnection, authenticateToken, async (req: any, res: any) => {
+    try {
+        const { userId } = req.params;
+        const discordBotToken = process.env.DISCORD_BOT_TOKEN;
+
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID richiesto'
+            });
+        }
+
+        if (!discordBotToken) {
+            const defaultAvatarIndex = parseInt(userId) % 6;
+            return res.json({
+                success: true,
+                avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+                isDefault: true
+            });
+        }
+
+        const response = await fetch(`https://discord.com/api/v10/users/${userId}`, {
+            headers: {
+                'Authorization': `Bot ${discordBotToken}`,
+            }
+        });
+
+        if (!response.ok) {
+            const defaultAvatarIndex = parseInt(userId) % 6;
+            return res.json({
+                success: true,
+                avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+                isDefault: true
+            });
+        }
+
+        const userData: any = await response.json();
+        
+        if (userData.avatar) {
+            const avatarHash = userData.avatar;
+            const isAnimated = avatarHash.startsWith('a_');
+            const extension = isAnimated ? 'gif' : 'png';
+            const avatarUrl = `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${extension}?size=128`;
+            
+            return res.json({
+                success: true,
+                avatarUrl: avatarUrl,
+                isDefault: false
+            });
+        }
+
+        const defaultAvatarIndex = (parseInt(userId) >> 22) % 6;
+        return res.json({
+            success: true,
+            avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+            isDefault: true
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero avatar Discord:', error);
+        const defaultAvatarIndex = parseInt(req.params.userId || '0') % 6;
+        return res.json({
+            success: true,
+            avatarUrl: `https://cdn.discordapp.com/embed/avatars/${defaultAvatarIndex}.png`,
+            isDefault: true
+        });
+    }
+});
+
+// GET /api/sync/test - Test connessione e autenticazione
+app.get('/api/v1/sync/test', authenticateAPI, (req: any, res: any) => {
+    res.json({
+        success: true,
+        message: 'Autenticazione valida',
+        authType: req.authType,
+        isBot: req.bot || false,
+        timestamp: new Date().toISOString()
+    });
+});
+
+// GET /api/sync/status - Stato della sincronizzazione
+app.get('/api/v1/sync/status', checkMongoConnection, authenticateAPI, async (req: any, res: any) => {
+    try {
+        const [membersCount, eventsCount, lastMemberUpdate, lastEventUpdate] = await Promise.all([
+            Member.countDocuments(),
+            Event.countDocuments(),
+            Member.findOne().sort({ updatedAt: -1 }).select('updatedAt').lean(),
+            Event.findOne().sort({ updatedAt: -1 }).select('updatedAt').lean()
+        ]);
+
+        res.json({
+            success: true,
+            status: {
+                members: {
+                    total: membersCount,
+                    lastUpdate: lastMemberUpdate?.updatedAt || null
+                },
+                events: {
+                    total: eventsCount,
+                    lastUpdate: lastEventUpdate?.updatedAt || null
+                },
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('❌ Errore nel recupero stato sincronizzazione:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Errore nel recupero stato'
+        });
+    }
+});
+
+// ==================== DISCORD BOT ADMIN API ====================
+const activeJobs = new Map();
+const DiscordSyncRun = require('./models/DiscordSyncRun');
+const { DiscordMemberSyncService } = require('./lib/discordMemberSync');
+const { Client: DiscordClient, GatewayIntentBits: DiscordGatewayIntentBits } = require('discord.js');
+
+// Middleware per verificare che l'utente sia un admin (rsiVerified === true e organizationRank >= 4)
+const requireAdmin = async (req: any, res: any, next: any) => {
+    try {
+        if (!req.user || !req.user.userId) {
+            return res.status(401).json({
+                success: false,
+                error: 'Utente non autenticato.'
+            });
+        }
+
+        const User = require('./models/User');
+        const user = await User.findById(req.user.userId);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: 'Utente non trovato.'
+            });
+        }
+
+        if (!user.rsiVerified) {
+            return res.status(403).json({
+                success: false,
+                error: 'Accesso negato. L\'utente non è verificato con RSI.'
+            });
+        }
+
+        if (user.organizationRank === null || user.organizationRank === undefined || user.organizationRank < 4) {
+            return res.status(403).json({
+                success: false,
+                error: `Accesso negato. Rango organizzativo insufficiente (richiesto >= 4).`
+            });
+        }
+
+        next();
+    } catch (error: any) {
+        console.error('Errore nel controllo privilegi admin:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Errore interno nel controllo permessi.'
+        });
+    }
+};
+
+// Status endpoint
+app.get('/api/v1/admin/discord/status', authenticateToken, requireAdmin, async (req: any, res: any) => {
+    const token = process.env.DISCORD_BOT_TOKEN;
+    const guildId = process.env.DISCORD_GUILD_ID;
+
+    if (!token || !guildId) {
+        return res.json({
+            success: true,
+            configured: false,
+            status: 'unconfigured',
+            guildName: null,
+            guildId: null,
+            version: 'v0.1.0-beta'
+        });
+    }
+
+    if (discordBot.isReady && discordBot.guild) {
+        return res.json({
+            success: true,
+            configured: true,
+            status: 'online',
+            guildName: discordBot.guild.name,
+            guildId: discordBot.guild.id,
+            version: 'v0.1.0-beta',
+            latency: discordBot.client ? discordBot.client.ws.ping : null,
+            wsPing: discordBot.client ? discordBot.client.ws.ping : null
+        });
+    }
+
+    if (discordBot.client && !discordBot.isReady) {
+        return res.json({
+            success: true,
+            configured: true,
+            status: 'loading',
+            guildName: null,
+            guildId: guildId,
+            version: 'v0.1.0-beta'
+        });
+    }
+
+    return res.json({
+        success: true,
+        configured: true,
+        status: 'offline',
+        guildName: null,
+        guildId: guildId,
+        version: 'v0.1.0-beta'
+    });
+});
+
+// Start bot endpoint
+app.post('/api/v1/admin/discord/start', authenticateToken, requireAdmin, async (req: any, res: any) => {
+    try {
+        const token = process.env.DISCORD_BOT_TOKEN;
+        const guildId = process.env.DISCORD_GUILD_ID;
+
+        if (!token || !guildId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Configurazione mancante. Compila DISCORD_BOT_TOKEN e DISCORD_GUILD_ID nel file .env.'
+            });
+        }
+
+        if (discordBot.isReady) {
+            return res.json({
+                success: true,
+                message: 'Il bot Discord è già attivo e online.'
+            });
+        }
+
+        console.log('🤖 Richiesta di avvio manuale bot Discord ricevuta...');
+        
+        // Promise che avvia il bot
+        const initPromise = discordBot.initialize();
+        
+        // Promise di timeout di 90 secondi gestita dal pannello admin (server)
+        const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => {
+                resolve('timeout');
+            }, 90000); // 90 secondi
+        });
+
+        const result = await Promise.race([initPromise, timeoutPromise]);
+
+        if (result === 'timeout') {
+            // Il bot non ha risposto in tempo, forziamo la disconnessione
+            if (discordBot.client) {
+                discordBot.client.destroy();
+                discordBot.client = null;
+            }
+            discordBot.isReady = false;
+            return res.status(500).json({
+                success: false,
+                error: 'Timeout: Il bot non ha dato risposta entro 90 secondi. Ritenuto offline.'
+            });
+        }
+
+        const success = result;
+        if (success) {
+            return res.json({
+                success: true,
+                message: 'Bot Discord avviato con successo!'
+            });
+        } else {
+            return res.status(500).json({
+                success: false,
+                error: 'Impossibile avviare il bot Discord. Verifica le credenziali ed i log.'
+            });
+        }
+    } catch (error: any) {
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno nell\'avvio del bot.'
+        });
+    }
+});
+
+// Stop bot endpoint
+app.post('/api/v1/admin/discord/stop', authenticateToken, requireAdmin, async (req: any, res: any) => {
+    try {
+        if (!discordBot.client && !discordBot.isReady) {
+            return res.json({
+                success: true,
+                message: 'Il bot Discord è già offline.'
+            });
+        }
+
+        console.log('🤖 Richiesta di arresto bot Discord ricevuta...');
+        await discordBot.disconnect();
+        return res.json({
+            success: true,
+            message: 'Bot Discord arrestato con successo.'
+        });
+    } catch (error: any) {
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno nell\'arresto del bot.'
+        });
+    }
+});
+
+// Trigger sync members job
+app.post('/api/v1/admin/discord/sync-members', authenticateToken, checkMongoConnection, requireAdmin, async (req: any, res: any) => {
+    const { dryRun } = req.body;
+    const isDryRun = dryRun === undefined ? true : Boolean(dryRun);
+    
+    // Check if there is already an active job running to avoid concurrency
+    for (const job of activeJobs.values()) {
+        if (job.status === 'running') {
+            return res.status(409).json({
+                success: false,
+                error: 'Un job di sincronizzazione è già in esecuzione.'
+            });
+        }
+    }
+
+    const jobId = `job_sync_${Date.now()}`;
+    const startedAt = new Date();
+    
+    activeJobs.set(jobId, {
+        jobId,
+        mode: isDryRun ? 'dry-run' : 'live',
+        status: 'running',
+        progress: 10,
+        startedAt,
+    });
+
+    // Run the sync process in the background
+    const username = req.user?.username || 'admin';
+    
+    // Fire and forget, but handle internally
+    (async () => {
+        try {
+            const service = new DiscordMemberSyncService({
+                dryRun: isDryRun,
+                token: process.env.DISCORD_BOT_TOKEN,
+                guildId: process.env.DISCORD_GUILD_ID
+            });
+
+            activeJobs.set(jobId, {
+                ...activeJobs.get(jobId),
+                progress: 40
+            });
+
+            const report = await service.syncMembers();
+
+            activeJobs.set(jobId, {
+                ...activeJobs.get(jobId),
+                progress: 100,
+                status: report.success ? 'completed' : 'failed',
+                finishedAt: new Date(),
+                result: report
+            });
+
+            await DiscordSyncRun.create({
+                jobId,
+                triggeredBy: username,
+                mode: isDryRun ? 'dry-run' : 'live',
+                status: report.success ? 'completed' : 'failed',
+                result: {
+                    readFromDiscord: report.readFromDiscord || 0,
+                    skippedBots: report.skippedBots || 0,
+                    added: report.added || 0,
+                    updated: report.updated || 0,
+                    unchanged: report.unchanged || 0,
+                    errors: report.errors || []
+                },
+                startedAt,
+                finishedAt: new Date()
+            });
+
+        } catch (error: any) {
+            activeJobs.set(jobId, {
+                ...activeJobs.get(jobId),
+                progress: 100,
+                status: 'failed',
+                finishedAt: new Date(),
+                error: error?.message || String(error)
+            });
+
+            try {
+                await DiscordSyncRun.create({
+                    jobId,
+                    triggeredBy: username,
+                    mode: isDryRun ? 'dry-run' : 'live',
+                    status: 'failed',
+                    result: {
+                        readFromDiscord: 0,
+                        skippedBots: 0,
+                        added: 0,
+                        updated: 0,
+                        unchanged: 0,
+                        errors: [error?.message || String(error)]
+                    },
+                    startedAt,
+                    finishedAt: new Date()
+                });
+            } catch (dbErr) {
+                console.error('Errore nel salvataggio del run fallito:', dbErr);
+            }
+        }
+    })();
+
+    return res.json({
+        success: true,
+        jobId,
+        message: 'Job di sincronizzazione accodato con successo.'
+    });
+});
+
+// Job status polling
+app.get('/api/v1/admin/jobs/:jobId', authenticateToken, requireAdmin, (req: any, res: any) => {
+    const { jobId } = req.params;
+    const job = activeJobs.get(jobId);
+
+    if (!job) {
+        return res.status(404).json({
+            success: false,
+            error: 'Job non trovato o scaduto.'
+        });
+    }
+
+    return res.json({
+        success: true,
+        job
+    });
+});
+
+// Sync execution history
+app.get('/api/v1/admin/discord/sync-history', authenticateToken, checkMongoConnection, requireAdmin, async (req: any, res: any) => {
+    try {
+        const history = await DiscordSyncRun.find({})
+            .sort({ startedAt: -1 })
+            .limit(20)
+            .lean();
+
+        return res.json({
+            success: true,
+            history
+        });
+    } catch (error: any) {
+        console.error('Errore nel recupero dello storico dei sync:', error);
+        return res.status(500).json({
+            success: false,
+            error: error?.message || 'Errore interno del server'
+        });
+    }
+});
+
+// Ottieni tutti gli utenti registrati e i loro rank (Solo Admin)
+app.get('/api/v1/admin/users', authenticateToken, checkMongoConnection, requireAdmin, async (req: any, res: any) => {
+    try {
+        const User = require('./models/User');
+        const users = await User.find({}, { password: 0 })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        return res.json({
+            success: true,
+            users
+        });
+    } catch (error: any) {
+        console.error('Errore nel recupero degli utenti:', error);
+        return res.status(500).json({
+            success: false,
+            error: error?.message || 'Errore interno del server'
+        });
+    }
+});
 
 // Inizializza e avvia il server
 (async () => {
@@ -2487,5 +3746,8 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
         console.log(`🚀 Server avviato su porta 5000`);
         console.log(`📊 Ambiente: ${process.env.NODE_ENV || 'development'}`);
         console.log(`🔗 Swagger UI: http://localhost:5000/api/v1/docs`);
+
+        // L'avvio del bot Discord è stato staccato dall'avvio del backend.
+        // Può essere avviato manualmente tramite il pannello Admin.
     });
 })();

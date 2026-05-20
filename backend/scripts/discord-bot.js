@@ -1,6 +1,40 @@
 const { Client, GatewayIntentBits } = require('discord.js');
-const { logger } = require('./lib/logger');
-const Member = require('./models/Member');
+const { logger } = require('../lib/logger');
+const Member = require('../models/Member');
+
+const DEFAULT_TAG = process.env.DISCORD_SYNC_DEFAULT_TAG || 'LSE-P';
+
+function determineTag(discordMember, defaultTag) {
+    if (!discordMember || !discordMember.roles || !discordMember.roles.cache) {
+        return defaultTag;
+    }
+
+    // Controlla se l'utente ha il ruolo "OPERATORE"
+    const hasOperatoreRole = discordMember.roles.cache.some(
+        role => role.name && role.name.toUpperCase() === 'OPERATORE'
+    );
+    if (hasOperatoreRole) {
+        return 'OPERATORE';
+    }
+
+    // Controlla se l'utente ha il ruolo "P-LSE" o "LSE-P"
+    const hasLsePRole = discordMember.roles.cache.some(
+        role => role.name && (role.name.toUpperCase() === 'P-LSE' || role.name.toUpperCase() === 'LSE-P')
+    );
+    if (hasLsePRole) {
+        return 'LSE-P';
+    }
+
+    // Controlla se l'utente ha il ruolo "LSE"
+    const hasLseRole = discordMember.roles.cache.some(
+        role => role.name && role.name.toUpperCase() === 'LSE'
+    );
+    if (hasLseRole) {
+        return 'LSE';
+    }
+
+    return defaultTag;
+}
 
 class DiscordBot {
     constructor() {
@@ -10,6 +44,10 @@ class DiscordBot {
     }
 
     async initialize() {
+        if (this.isReady && this.client) {
+            return true;
+        }
+
         const token = process.env.DISCORD_BOT_TOKEN;
         const guildId = process.env.DISCORD_GUILD_ID;
 
@@ -38,6 +76,33 @@ class DiscordBot {
 
         this.client.on('error', (error) => {
             logger.error('Discord bot error:', error);
+        });
+
+        // Sincronizzazione in tempo reale al cambio di ruolo su Discord
+        this.client.on('guildMemberUpdate', async (oldMember, newMember) => {
+            try {
+                const oldRoles = oldMember.roles.cache.map(r => r.id).sort().join(',');
+                const newRoles = newMember.roles.cache.map(r => r.id).sort().join(',');
+                if (oldRoles === newRoles) {
+                    return;
+                }
+
+                logger.info(`Discord roles updated for member ${newMember.user.tag}`);
+
+                const newTag = determineTag(newMember, DEFAULT_TAG);
+
+                const result = await Member.findOneAndUpdate(
+                    { id: newMember.user.id },
+                    { $set: { tag: newTag } },
+                    { new: true }
+                );
+
+                if (result) {
+                    logger.info(`[Real-time Sync] Updated tag to '${newTag}' in DB for member ${newMember.user.tag}`);
+                }
+            } catch (error) {
+                logger.error(`Error handling guildMemberUpdate for ${newMember.user.id}:`, error);
+            }
         });
 
         try {
@@ -73,10 +138,11 @@ class DiscordBot {
             logger.info(`Fetched ${members.size} members from Discord`);
 
             // Get existing members from DB
-            const existingMembers = await Member.find({}, 'id name');
-            const existingIds = new Set(existingMembers.map(m => m.id));
+            const existingMembers = await Member.find({}, 'id name tag');
+            const existingById = new Map(existingMembers.map(m => [m.id, m]));
 
             let added = 0;
+            let updated = 0;
             let skipped = 0;
 
             // Find max key
@@ -87,9 +153,16 @@ class DiscordBot {
                 // Skip bots
                 if (member.user.bot) continue;
 
-                // Skip if already exists
-                if (existingIds.has(memberId)) {
-                    skipped++;
+                const currentTag = determineTag(member, DEFAULT_TAG);
+                const existing = existingById.get(memberId);
+
+                if (existing) {
+                    if (existing.tag !== currentTag) {
+                        await Member.updateOne({ id: memberId }, { $set: { tag: currentTag } });
+                        updated++;
+                    } else {
+                        skipped++;
+                    }
                     continue;
                 }
 
@@ -98,7 +171,7 @@ class DiscordBot {
                     key: ++maxKey,
                     name: member.user.username,
                     id: memberId,
-                    tag: 'LSE-P',
+                    tag: currentTag,
                     index: '',
                     date: member.joinedAt ? member.joinedAt.toISOString().split('T')[0] : '',
                     idoneita: false,
@@ -113,8 +186,8 @@ class DiscordBot {
                 added++;
             }
 
-            logger.info(`Discord sync completed: ${added} added, ${skipped} skipped`);
-            return { success: true, added, skipped };
+            logger.info(`Discord sync completed: ${added} added, ${updated} updated, ${skipped} skipped`);
+            return { success: true, added, updated, skipped };
 
         } catch (error) {
             logger.error('Discord sync error:', error);

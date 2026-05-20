@@ -43,8 +43,8 @@ export function useMemberFilters(members) {
             // Gestione del filtro per tag
             let matchTag;
             if (selectedTag === 'Tutti') {
-                // Mostra tutti i membri non promossi + tutti i membri LSE
-                matchTag = m.tag === 'LSE-P' || m.tag === 'LSE';
+                // Mostra tutti i membri LSE-P, LSE e OPERATORE
+                matchTag = m.tag === 'LSE-P' || m.tag === 'LSE' || m.tag === 'OPERATORE';
             } else {
                 // Filtro per tag specifico
                 matchTag = m.tag === selectedTag;
