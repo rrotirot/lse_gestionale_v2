@@ -281,7 +281,7 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Crea / Pianifica Job</h3>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Crea / Pianifica Job (WIP)</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Avvia un job immediatamente o pianificalo</p>
           </div>
           <button onClick={() => setShowJobModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors text-xl leading-none">&times;</button>
@@ -310,13 +310,12 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
                 <button
                   key={m}
                   onClick={() => setJobForm(f => ({ ...f, mode: m }))}
-                  className={`py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${
-                    jobForm.mode === m
-                      ? m === "live"
-                        ? "border-indigo-500 bg-indigo-600 text-white"
-                        : "border-blue-500 bg-blue-600 text-white"
-                      : "border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
-                  }`}
+                  className={`py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${jobForm.mode === m
+                    ? m === "live"
+                      ? "border-indigo-500 bg-indigo-600 text-white"
+                      : "border-blue-500 bg-blue-600 text-white"
+                    : "border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
                 >
                   {m === "dry-run" ? "🔍 Dry Run" : "⚡ Live"}
                 </button>
@@ -337,11 +336,10 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
                 <button
                   key={String(val)}
                   onClick={() => setJobForm(f => ({ ...f, scheduled: val }))}
-                  className={`py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${
-                    jobForm.scheduled === val
-                      ? "border-purple-500 bg-purple-600 text-white"
-                      : "border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
-                  }`}
+                  className={`py-2 px-3 rounded-lg border text-sm font-medium transition-colors ${jobForm.scheduled === val
+                    ? "border-purple-500 bg-purple-600 text-white"
+                    : "border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
                 >
                   {label}
                 </button>
@@ -508,7 +506,7 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
                 disabled={botStatus.status !== "online"}
                 className="w-full rounded-lg px-4 py-2.5 bg-violet-600 text-white font-medium hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                <span>📋</span> Crea / Pianifica Job
+                <span>📋</span> Crea / Pianifica Job (WIP)
               </button>
               <button className="w-full rounded-lg px-4 py-2.5 bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400 cursor-not-allowed" disabled>
                 Sync eventi (coming soon)
