@@ -36,11 +36,11 @@ export default function MembersFilters({
     };
 
     return (
-        <div className="relative ui-float" ref={dropdownRef}>
+        <div className="relative" ref={dropdownRef}>
             <button
                 type="button"
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="flex items-center gap-2 pl-10 pr-10 py-2.5 rounded-lg border border-white/10 bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/60 dark:focus:ring-blue-400/60 focus:border-transparent transition-all cursor-pointer min-w-[200px] text-left"
+                className="relative ui-float flex items-center gap-2 pl-10 pr-10 py-2.5 rounded-lg border border-white/10 bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/60 dark:focus:ring-blue-400/60 focus:border-transparent transition-all cursor-pointer min-w-[200px] text-left"
             >
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <svg className="w-5 h-5 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -62,7 +62,7 @@ export default function MembersFilters({
 
             {/* Dropdown menu */}
             {isDropdownOpen && (
-                <div className="absolute z-50 mt-2 w-full rounded-lg ui-float border border-white/10 shadow-xl overflow-hidden transform transition-all duration-200 ease-out origin-top">
+                <div className="absolute z-50 mt-2 w-full rounded-lg ui-float bg-[#0f131a] border border-white/10 shadow-xl overflow-hidden transform transition-all duration-200 ease-out origin-top">
                     <div 
                         className="max-h-64 overflow-y-auto"
                         style={{

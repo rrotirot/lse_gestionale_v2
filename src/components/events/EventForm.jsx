@@ -19,7 +19,7 @@ export default function EventForm({
 }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 bg-transparent ui-float">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto border-0 bg-[#0b0f18]/95 ui-float">
                 <DialogHeader>
                     <DialogTitle>
                         {isEditing ? 'Modifica Evento' : 'Crea Nuovo Evento'}

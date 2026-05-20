@@ -127,7 +127,7 @@ body {
   position: relative;
   border-radius: 0.85rem;
   border: 1px solid transparent;
-  background:
+  background-image:
     radial-gradient(140% 120% at 20% 0%, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.02) 55%, rgba(0, 0, 0, 0.0) 70%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
   box-shadow:
@@ -160,7 +160,7 @@ body {
   position: relative;
   border-radius: 0.85rem;
   border: 1px solid transparent;
-  background:
+  background-image:
     radial-gradient(140% 120% at 20% 0%, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 55%, rgba(0, 0, 0, 0.0) 70%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
   box-shadow:

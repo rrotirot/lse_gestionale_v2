@@ -10,7 +10,7 @@ import {
 export default function MembersHelpModal({ open, onOpenChange }) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto border-0 bg-transparent ui-float">
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto border-0 bg-[#0b0f18]/95 ui-float">
                 <DialogHeader>
                     <DialogTitle>Legenda e Comandi</DialogTitle>
                     <DialogDescription>

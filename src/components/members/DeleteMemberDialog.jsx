@@ -42,7 +42,7 @@ export default function DeleteMemberDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-2xl border-0 bg-transparent ui-float">
+            <DialogContent className="max-w-2xl border-0 bg-[#0b0f18]/95 ui-float">
                 <DialogHeader>
                     <DialogTitle>Elimina Membro: {member.name}</DialogTitle>
                     <DialogDescription>
