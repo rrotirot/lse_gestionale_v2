@@ -1,0 +1,62 @@
+# =========================================================================
+# LSE GESTIONALE V2 - FRONTEND DOCKERFILE (NEXT.JS)
+# Optimized multi-stage build for production deployment
+# =========================================================================
+
+# Stage 1: Install dependencies only when needed
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Copy package manifests
+COPY package*.json ./
+
+# Clean install of all dependencies (including devDependencies for build)
+RUN npm ci
+
+# Stage 2: Build the Next.js application
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy node_modules from deps stage and all source files
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Set building environment variables
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+
+# Run Next.js build
+RUN npm run build
+
+# Stage 3: Production runner stage
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# Ensure correct permissions & security (run as non-root)
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Set production environment variables
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Copy only the necessary build artifacts and production dependencies
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+# Apply correct ownership
+RUN chown -R nextjs:nodejs /app
+
+# Switch to non-root user
+USER nextjs
+
+# Expose port
+EXPOSE 3000
+
+# Start Next.js server
+CMD ["npm", "run", "start"]
