@@ -12,7 +12,7 @@ const promotedMemberSchema = new mongoose.Schema({
     },
     tag: {
         type: String,
-        default: 'LSE' // I membri promossi hanno tag LSE
+        default: 'LSE'// I membri promossi hanno tag LSE
     },
     name: {
         type: String,

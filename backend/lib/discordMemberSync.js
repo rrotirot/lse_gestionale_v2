@@ -24,12 +24,12 @@ function determineTag(discordMember, defaultTag) {
         return defaultTag;
     }
 
-    // Controlla se l'utente ha il ruolo "OPERATORE"
+    // Controlla se l'utente ha il ruolo "OPERATORE" o "LSE"
     const hasOperatoreRole = discordMember.roles.cache.some(
-        role => role.name && role.name.toUpperCase() === 'OPERATORE'
+        role => role.name && (role.name.toUpperCase() === 'OPERATORE' || role.name.toUpperCase() === 'LSE')
     );
     if (hasOperatoreRole) {
-        return 'OPERATORE';
+        return 'LSE';
     }
 
     // Controlla se l'utente ha il ruolo "P-LSE" o "LSE-P"
@@ -38,14 +38,6 @@ function determineTag(discordMember, defaultTag) {
     );
     if (hasLsePRole) {
         return 'LSE-P';
-    }
-
-    // Controlla se l'utente ha il ruolo "LSE"
-    const hasLseRole = discordMember.roles.cache.some(
-        role => role.name && role.name.toUpperCase() === 'LSE'
-    );
-    if (hasLseRole) {
-        return 'LSE';
     }
 
     return defaultTag;
