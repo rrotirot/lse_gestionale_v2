@@ -12,6 +12,8 @@
         "dev": "ts-node server.ts",
         "restart:dev": "node scripts/restart-backend.js dev",
         "restart:start": "node scripts/restart-backend.js start",
+        "discord:sync": "ts-node scripts/sync-discord-members.js",
+        "discord:sync:dry": "ts-node scripts/sync-discord-members.js --dry-run",
         "clear-members": "node scripts/clear-members.js",
         "import-events": "node import-bot-events.js",
         "smoke": "node tests/smoke.test.js",

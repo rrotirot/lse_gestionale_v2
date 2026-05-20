@@ -90,8 +90,9 @@ export default function MemberDetailModal({
         : null;
 
     return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="!inset-0 !left-0 !top-0 !translate-x-0 !translate-y-0 !w-screen !max-w-none !h-screen !max-h-none !p-0 !flex !flex-col !gap-0 overflow-hidden border-0 bg-transparent rounded-none">
+        <>
+            <Dialog open={open} onOpenChange={onOpenChange}>
+                <DialogContent className="!inset-0 !left-0 !top-0 !translate-x-0 !translate-y-0 !w-screen !max-w-none !h-screen !max-h-none !p-0 !flex !flex-col !gap-0 overflow-hidden border-0 bg-transparent rounded-none">
                 <div className="relative w-full max-w-[1100px] mx-auto h-full flex flex-col ui-float bg-[#0b0f18]/90 border border-white/10 rounded-xl overflow-hidden my-3 sm:my-4">
                     <button
                         onClick={() => onOpenChange(false)}
@@ -665,6 +666,7 @@ export default function MemberDetailModal({
                 </div>
                 </div>
             </DialogContent>
+            </Dialog>
 
             {/* Dialog per selezione motivazioni eliminazione */}
             <DeleteMemberDialog
@@ -673,6 +675,6 @@ export default function MemberDetailModal({
                 onOpenChange={setShowDeleteDialog}
                 onConfirm={handleDeleteConfirm}
             />
-        </Dialog>
+        </>
     );
 }
