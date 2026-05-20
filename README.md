@@ -14,7 +14,7 @@ Interfaccia web React per visualizzare e gestire l'elenco dei membri dell'organi
 npm install
 npm run dev
 ```
-Il frontend sarà disponibile su http://localhost:5173
+Il frontend sarà disponibile su http://localhost:[porta]
 
 ### Backend
 ```bash
@@ -22,7 +22,7 @@ cd backend
 npm install
 npm run dev
 ```
-Il backend sarà disponibile su http://localhost:3000
+Il backend sarà disponibile su http://localhost:[porta]
 
 ## 📂 Struttura del progetto
 
