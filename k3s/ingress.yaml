@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lse-ingress
+  namespace: lse-gestionale
+  annotations:
+    # Use Traefik (K3s default Ingress Controller)
+    kubernetes.io/ingress.class: "traefik"
+    
+    # Optional Traefik annotations
+    traefik.ingress.kubernetes.io/router.entrypoints: "web"
+    
+    # Max upload size (10MB) to match Express multer config limits
+    traefik.ingress.kubernetes.io/router.middlewares: "lse-gestionale-stripprefix@kubernetescrd"
+spec:
+  rules:
+    # You can change 'lse.local' to your desired domain name or remove the 'host' line 
+    # entirely to make K3s respond to any incoming IP address of the node.
+    - host: lse.local
+      http:
+        paths:
+          # Route all API traffic to the backend service
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 5000
+
+          # Route all other web traffic (UI, assets) to the frontend service
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 3000

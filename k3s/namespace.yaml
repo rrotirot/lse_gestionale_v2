@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lse-gestionale
+  labels:
+    app.kubernetes.io/name: lse-gestionale
+    app.kubernetes.io/part-of: lse-gestionale
