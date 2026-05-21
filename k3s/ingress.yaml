@@ -9,9 +9,8 @@ metadata:
     
     # Optional Traefik annotations
     traefik.ingress.kubernetes.io/router.entrypoints: "web"
-    
-    # Max upload size (10MB) to match Express multer config limits
-    traefik.ingress.kubernetes.io/router.middlewares: "lse-gestionale-stripprefix@kubernetescrd"
+    # NOTE: niente middleware stripPrefix: Express monta le route con /api/... (es. /api/health, /api/v1/members).
+    # Strippare il prefisso causerebbe 404 su tutte le API.
 spec:
   rules:
     # You can change 'lse.local' to your desired domain name or remove the 'host' line 

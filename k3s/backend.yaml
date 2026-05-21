@@ -26,8 +26,8 @@ spec:
       containers:
         - name: backend
           # Adjust the image name/tag as needed for your container registry (e.g. dockerhub-username/lse-backend:latest)
-          image: lse-gestionale-backend:latest
-          imagePullPolicy: IfNotPresent
+          image: alexkill536ita/lse-gestionale-backend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 5000
               name: http
@@ -51,11 +51,14 @@ spec:
                 secretKeyRef:
                   name: lse-secrets
                   key: MONGODB_URI
+            # REDIS_URL: opzionale. backend/lib/cache.js:14 fa fallback se assente.
+            # Se non hai un Redis nel cluster, lascia il secret non definito.
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
                   name: lse-secrets
                   key: REDIS_URL
+                  optional: true
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:

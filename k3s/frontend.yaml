@@ -26,8 +26,8 @@ spec:
       containers:
         - name: frontend
           # Adjust the image name/tag as needed for your container registry (e.g. dockerhub-username/lse-frontend:latest)
-          image: lse-gestionale-frontend:latest
-          imagePullPolicy: IfNotPresent
+          image: alexkill536ita/lse-gestionale-frontend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
               name: http
@@ -39,18 +39,20 @@ spec:
               cpu: 500m
               memory: 512Mi
           
-          # Environment variables for the frontend
+          # Environment variables for the frontend.
+          # NEXT_PUBLIC_* è inlinato al build-time nel bundle JS: NON impostarlo qui.
+          # Il browser usa URL relativa (vuota) → Traefik instrada /api/* al backend.
+          # Il server (SSR / Route Handlers) usa BACKEND_URL via DNS interno cluster.
           env:
             - name: NODE_ENV
               value: "production"
-            # Point to the internal cluster service DNS for any Server-Side Rendering (SSR)
-            - name: NEXT_PUBLIC_RSI_API_URL
+            - name: BACKEND_URL
               value: "http://backend-service:5000"
 
           # Health checks for frontend deployment
           livenessProbe:
             httpGet:
-              path: /
+              path: /api/health
               port: 3000
             initialDelaySeconds: 30
             periodSeconds: 20
@@ -58,7 +60,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /
+              path: /api/health
               port: 3000
             initialDelaySeconds: 15
             periodSeconds: 10

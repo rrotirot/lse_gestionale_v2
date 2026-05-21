@@ -1,44 +1,32 @@
 # =========================================================================
-# LSE GESTIONALE V2 - BACKEND DOCKERFILE (EXPRESS & TYPESCRIPT)
-# Optimized multi-stage build for production deployment
+# LSE GESTIONALE V2 - BACKEND DOCKERFILE (EXPRESS + TYPESCRIPT)
+# Multi-stage: builder compila TS → runner avvia solo dist/ + prod deps.
 # =========================================================================
 
-# Stage 1: Build the TypeScript backend
+# ---- Stage 1: builder ---------------------------------------------------
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Copy package manifests
-COPY package*.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 
-# Clean install of all dependencies (including devDependencies for TypeScript compilation)
-RUN npm ci
-
-# Copy the rest of the backend files
 COPY . .
-
-# Compile TypeScript into JavaScript (output will go to dist/)
 RUN npm run build
 
-# Stage 2: Production runner
+# ---- Stage 2: runner ----------------------------------------------------
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Ensure correct permissions & security (run as non-root)
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nodeapp
-
-# Set production environment variables
 ENV NODE_ENV=production
 ENV PORT=5000
 
-# Copy package manifests
-COPY package*.json ./
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser  --system --uid 1001 nodeapp
 
-# Install only production dependencies
-RUN npm ci --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
-# Copy compiled files and helper scripts from the builder stage
-COPY --from=builder /app/dist ./dist
+COPY --from=builder --chown=nodeapp:nodejs /app/dist ./dist
 COPY --from=builder /app/models ./dist/models
 COPY --from=builder /app/scripts ./dist/scripts
 COPY --from=builder /app/routes ./dist/routes
@@ -47,14 +35,8 @@ COPY --from=builder /app/lib/discordMemberSync.js ./dist/lib
 COPY --from=builder /app/lib/parseMembers.js ./dist/lib
 COPY --from=builder /app/lib/swagger.js ./dist/lib
 
-# Apply correct ownership
-RUN chown -R nodeapp:nodejs /app
-
-# Switch to non-root user
 USER nodeapp
 
-# Expose port
 EXPOSE 5000
 
-# Start Express server
 CMD ["node", "dist/server.js"]

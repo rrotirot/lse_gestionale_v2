@@ -1,0 +1,45 @@
+# Dependencies / build artifacts
+node_modules
+dist
+*.tsbuildinfo
+
+# VCS / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.claude
+
+# Local env (i secret arrivano da K3s)
+.env
+.env.*
+!.env.example
+
+# Logs / cache / runtime
+*.log
+npm-debug.log*
+.npm
+.cache
+uploads
+backend-container-logs.txt
+
+# Docs / backup
+*.md
+!README.md
+server.js.backup
+
+# Test / coverage
+coverage
+tests
+**/*.test.*
+**/*.spec.*
+jest.config.js
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile*
+.dockerignore

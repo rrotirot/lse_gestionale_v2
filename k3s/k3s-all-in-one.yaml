@@ -1,11 +1,10 @@
 # =========================================================================
-# LSE GESTIONALE V2 - K3S ALL-IN-ONE MANIFEST (COMBINED IMAGE)
-# Single container running both Next.js (port 3000) and Express (port 5000)
+# LSE GESTIONALE V2 - K3S ALL-IN-ONE MANIFEST
 # Deploy: kubectl apply -f k3s-all-in-one.yaml
 # =========================================================================
 
 # ---------------------------------------------------------
-# 1. NAMESPACE DEFINITION
+# 1. NAMESPACE
 # ---------------------------------------------------------
 apiVersion: v1
 kind: Namespace
@@ -14,27 +13,23 @@ metadata:
   labels:
     app.kubernetes.io/name: lse-gestionale
     app.kubernetes.io/part-of: lse-gestionale
+
 ---
 # ---------------------------------------------------------
-# 2. CONFIGMAP - GLOBAL CONFIGURATION
+# 2. CONFIGMAP
 # ---------------------------------------------------------
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: lse-config
   namespace: lse-gestionale
-  labels:
-    app.kubernetes.io/name: lse-gestionale
-    app.kubernetes.io/part-of: lse-gestionale
 data:
-  # General App Configuration
   NODE_ENV: "production"
   PORT: "5000"
-  CORS_ORIGIN: "*"
-
-  # Discord Member Sync Custom Settings
+  CORS_ORIGIN: "https://lse.alexkill536.duckdns.org"
   DISCORD_SYNC_DEFAULT_TAG: "LSE-P"
   DISCORD_SYNC_NAME_SOURCE: "displayName"
+
 ---
 # ---------------------------------------------------------
 # 3. SECRETS - ENCRYPTED CREDENTIALS (BASE64)
@@ -51,7 +46,6 @@ type: Opaque
 data:
   # External Database Connections
   MONGODB_URI: bW9uZ29kYitzcnY6Ly9tYW56b2FsaXp6aV9kYl91c2VyOmtzeHlxRGk2YkVTcEY3b2tAY2x1c3RlcjAubG16cjJ3OC5tb25nb2RiLm5ldC8/YXBwTmFtZT1DbHVzdGVyMA==
-  REDIS_URL: cmVkaXM6Ly9sb2NhbGhvc3Q6NjM3OQ==
 
   # Security & Authentication keys
   JWT_SECRET: ZGV2LWp3dC1zZWNyZXQta2V5LWZvci1kZXZlbG9wbWVudA==
@@ -60,18 +54,83 @@ data:
   # Discord Bot Integrations
   DISCORD_BOT_TOKEN: TVRVd05qVTRNVGd4TkRRd01qSXlNREV3TXcuR1YxSllTLmRTaEUzY0U1dG4xOVUtWjJHaDRjR3F4cFd6MmtETkNwX2V1dlk4
   DISCORD_GUILD_ID: MTM1MTMwOTM5MzkwNzY3OTI3Mw==
+
 ---
 # ---------------------------------------------------------
-# 4. COMBINED APP - DEPLOYMENT (FRONTEND + BACKEND)
+# 4. MIDDLEWARE - Redirect HTTP → HTTPS
+# ---------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: lse-gestionale
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+
+---
+# ---------------------------------------------------------
+# 5. INGRESSROUTE - HTTP (solo redirect → HTTPS)
+# ---------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: lse-http
+  namespace: lse-gestionale
+spec:
+  entryPoints:
+    - web                  
+  routes:
+    - match: Host(`lse.alexkill536.duckdns.org`)
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+      services:
+        - name: frontend-service     # destinazione fittizia, redirect avviene prima
+          port: 3000
+
+---
+# ---------------------------------------------------------
+# 6. INGRESSROUTE - HTTPS (traffico reale)
+# ---------------------------------------------------------
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: lse-https
+  namespace: lse-gestionale
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # /api/* → backend Express (NO strip prefix: Express monta le route con /api/...)
+    - match: Host(`lse.alexkill536.duckdns.org`) && PathPrefix(`/api`)
+      kind: Rule
+      services:
+        - name: backend-service
+          port: 5000
+
+    # /* → frontend Next.js
+    - match: Host(`lse.alexkill536.duckdns.org`)
+      kind: Rule
+      services:
+        - name: frontend-service
+          port: 3000
+
+  tls:
+    certResolver: duckdns
+
+---
+# ---------------------------------------------------------
+# 7. BACKEND - DEPLOYMENT
 # ---------------------------------------------------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: lse-app
+  name: lse-backend
   namespace: lse-gestionale
   labels:
-    app: lse-app
-    app.kubernetes.io/name: lse-app
+    app: lse-backend
     app.kubernetes.io/part-of: lse-gestionale
 spec:
   replicas: 1
@@ -83,46 +142,39 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app: lse-app
+      app: lse-backend
   template:
     metadata:
       labels:
-        app: lse-app
+        app: lse-backend
     spec:
       containers:
-        - name: lse-app
-          image: alexkill536ita/lse-gestionale:latest
+        - name: backend
+          image: alexkill536ita/lse-gestionale-backend:1.0.0
           imagePullPolicy: Always
           ports:
-            - containerPort: 3000
-              name: frontend
             - containerPort: 5000
-              name: backend
+              name: http
           resources:
             requests:
-              cpu: 200m
-              memory: 512Mi
+              cpu: 100m
+              memory: 256Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
-          
-          # Environment variables mapped from ConfigMap
+              cpu: 500m
+              memory: 512Mi
+
+          # Variabili non sensibili
           envFrom:
             - configMapRef:
                 name: lse-config
-          
-          # Environment variables mapped from Secrets
+
+          # Variabili sensibili da Secret
           env:
             - name: MONGODB_URI
               valueFrom:
                 secretKeyRef:
                   name: lse-secrets
                   key: MONGODB_URI
-            - name: REDIS_URL
-              valueFrom:
-                secretKeyRef:
-                  name: lse-secrets
-                  key: REDIS_URL
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -143,87 +195,138 @@ spec:
                 secretKeyRef:
                   name: lse-secrets
                   key: DISCORD_GUILD_ID
-            # Frontend needs to know the backend URL (localhost since same container)
-            - name: NEXT_PUBLIC_RSI_API_URL
-              value: "http://localhost:5000"
 
-          # Liveness probe on backend health endpoint
           livenessProbe:
             httpGet:
               path: /api/health
               port: 5000
-            initialDelaySeconds: 25
+            initialDelaySeconds: 20
             periodSeconds: 15
             timeoutSeconds: 5
             failureThreshold: 3
-          
-          # Readiness probe on frontend (both services must be up)
           readinessProbe:
             httpGet:
-              path: /
-              port: 3000
-            initialDelaySeconds: 15
+              path: /api/health
+              port: 5000
+            initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3
-            successThreshold: 1
-            failureThreshold: 3
+            failureThreshold: 2
+
 ---
 # ---------------------------------------------------------
-# 5. COMBINED APP - SERVICE
+# 8. BACKEND - SERVICE (ClusterIP — mai esposto all'esterno)
 # ---------------------------------------------------------
 apiVersion: v1
 kind: Service
 metadata:
-  name: lse-app-service
+  name: backend-service
   namespace: lse-gestionale
   labels:
-    app: lse-app
-    app.kubernetes.io/name: lse-app
+    app: lse-backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: 5000
+      protocol: TCP
+      name: http
+  selector:
+    app: lse-backend
+
+---
+# ---------------------------------------------------------
+# 9. FRONTEND - DEPLOYMENT
+# ---------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lse-frontend
+  namespace: lse-gestionale
+  labels:
+    app: lse-frontend
     app.kubernetes.io/part-of: lse-gestionale
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: lse-frontend
+  template:
+    metadata:
+      labels:
+        app: lse-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: alexkill536ita/lse-gestionale-frontend:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          env:
+            - name: NODE_ENV
+              value: "production"
+
+            # ── SSR / Server Components ──────────────────────────────
+            # DNS interno del cluster: mai visibile al browser.
+            # Usalo con: process.env.BACKEND_URL
+            - name: BACKEND_URL
+              value: "http://backend-service:5000"
+
+            # ── Client-side (browser) ────────────────────────────────
+            # NEXT_PUBLIC_* è inlinato nel bundle JS al BUILD-TIME del Dockerfile.
+            # Impostarlo qui non ha effetto: il valore client è già stato baked.
+            # Build con NEXT_PUBLIC_RSI_API_URL="" → URL relativa → Traefik /api/*.
+
+          # Probe su /api/health (route handler Next.js, vedi src/app/api/health/route.js)
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+---
+# ---------------------------------------------------------
+# 10. FRONTEND - SERVICE (ClusterIP — mai esposto all'esterno)
+# ---------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: lse-gestionale
+  labels:
+    app: lse-frontend
 spec:
   type: ClusterIP
   ports:
     - port: 3000
       targetPort: 3000
       protocol: TCP
-      name: frontend
-    - port: 5000
-      targetPort: 5000
-      protocol: TCP
-      name: backend
+      name: http
   selector:
-    app: lse-app
----
-# ---------------------------------------------------------
-# 6. TRAEFIK INGRESSROUTE - ROUTING TRAFFIC
-# ---------------------------------------------------------
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: lse-ingress
-  namespace: lse-gestionale
-  labels:
-    app: lse-app
-    app.kubernetes.io/name: lse-app
-    app.kubernetes.io/part-of: lse-gestionale
-spec:
-  entryPoints:
-    - web
-  routes:
-    # Route all API traffic to the backend port (higher priority)
-    # Change 'lse.local' to your production DNS domain,
-    # or remove the Host(`...`) matcher to respond to all hostnames.
-    - match: Host(`lse.local`) && PathPrefix(`/api`)
-      kind: Rule
-      priority: 20
-      services:
-        - name: lse-app-service
-          port: 5000
-
-    # Route all other web traffic (UI, assets) to the frontend port
-    - match: Host(`lse.local`) && PathPrefix(`/`)
-      kind: Rule
-      priority: 10
-      services:
-        - name: lse-app-service
-          port: 3000
+    app: lse-frontend

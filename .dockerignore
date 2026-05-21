@@ -1,0 +1,50 @@
+# Dependencies / build artifacts
+node_modules
+.next
+out
+dist
+*.tsbuildinfo
+
+# Backend (build separato, ha proprio Dockerfile)
+backend
+
+# VCS / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.claude
+
+# Local env (i secret arrivano da K3s)
+.env
+.env.*
+!.env.example
+
+# Logs / cache
+*.log
+npm-debug.log*
+.npm
+.cache
+
+# Docs / esempi
+docs
+examples
+*.md
+!README.md
+
+# Test / coverage
+coverage
+**/*.test.*
+**/*.spec.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker (evita ricorsione)
+Dockerfile*
+.dockerignore
+
+# K3s manifests (non servono nell'immagine)
+k3s

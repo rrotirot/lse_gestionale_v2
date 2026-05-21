@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"D:\\\\2-Progetti\\\\Progetti Node.JS\\\\lse_gestionale_v2\" status --short)",
+      "Bash(git *)"
+    ]
+  }
+}
