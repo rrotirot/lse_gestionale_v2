@@ -5,106 +5,147 @@
 Il repository contiene:
 - **Frontend** in `src/` basato su **Next.js 16**, **React 19**, **Tailwind CSS 4** e componenti UI Radix.
 - **Backend** in `backend/` basato su **Node.js + Express + MongoDB**, con logica applicativa per membri, eventi, autenticazione e integrazione con RSI/Discord.
-- **Documentazione** già presente (`docs/ANALISI.md`, `backend/ANALISI_BACKEND*.md`, `backend/SECRETS.md`, ecc.) che descrive in dettaglio la prima versione dell’architettura.
+- **Documentazione** in `docs/` con flowchart architettura, mappa logica bot, stato progetto e archivio documenti storici.
 
-Il frontend storico React/Vite è stato migrato (o è in corso di migrazione) al nuovo **app router di Next.js** (`src/app/...`), mantenendo gran parte della logica e dei componenti esistenti in `src/components`, `src/views`, `src/context`, `src/hooks` e `src/services`.
+La migrazione da React/Vite a Next.js è **completata**. Il progetto è pronto per il deployment con Docker + Kubernetes.
+
+---
 
 ### Frontend (Next.js)
 
-- **Entry points Next**:
-  - `src/app/layout.jsx`: layout root dell’app.
+- **Routing (App Router)**:
+  - `src/app/layout.jsx`: layout root dell'app.
   - `src/app/page.jsx`: home/dashboard principale.
   - `src/app/login/page.jsx`: pagina di login.
   - `src/app/members/page.jsx`: pagina gestione membri.
   - `src/app/calendar/page.jsx`: pagina calendario eventi.
-- **Routing legacy**:
-  - Restano presenti i vecchi “route components” (`components/app/*-route.jsx`) e le `views` (`views/*.jsx`) compatibili con l’architettura precedente; possono essere gradualmente sostituiti da pagine Next native.
+  - `src/app/admin/`: sezione admin (gestione Discord bot, sync, utenti).
+- **Routing legacy (ancora presente, da pulire)**:
+  - `src/App.jsx`: view router SPA (state-based, non Next).
+  - `src/views/*.jsx`: pagine legacy (HomePage, MembersPage, CalendarPage, LoginPage, AdminDiscordPage).
+  - `src/components/app/*-route.jsx`: wrapper route compatibili con la vecchia architettura.
 - **Gestione stato frontend**:
-  - `context/MembersContext.jsx`, `context/EventsContext.jsx`, più vari custom hooks (`hooks/useMembers.js`, `useEvents.js`, `useAuth.js`, ecc.) per incapsulare l’accesso ai servizi API.
+  - `context/AuthContext.jsx`, `context/MembersContext.jsx`, `context/EventsContext.jsx`.
+  - Custom hooks: `hooks/useMembers.js`, `hooks/useEvents.js`, `hooks/useAuth.js`, `hooks/useDiscordAvatar.js`, `hooks/usePromotedMembers.js`, `hooks/useMemberFilters.js`.
 - **Servizi HTTP**:
-  - `services/authService.js`, `membersService.js`, `eventsService.js`, `userService.js` orchestrano le chiamate al backend.
-  - `config/api.js` centralizza le base URL e la configurazione di base delle richieste.
+  - `services/authService.js`, `membersService.js`, `eventsService.js`, `userService.js`, `discordAdminService.js`.
+  - `config/api.js` centralizza le base URL e la configurazione delle richieste.
+  - `lib/runtime-config.js` per configurazioni runtime (API URL, token storage).
 - **UI & Design system**:
-  - Componenti base in `components/ui/*.tsx` (button, input, dialog, form, select, badge, skeleton, ecc.) costruiti sopra Radix/UI e Tailwind.
+  - Componenti base in `components/ui/*.tsx` (button, input, dialog, form, select, badge, skeleton, tooltip, popover, scroll-area, accordion, avatar, switch, textarea, time-input, calendar) costruiti sopra Radix/UI e Tailwind.
   - Componenti di dominio:
     - Membri: `components/members/*` (liste, card, modali di aggiunta/eliminazione, filtri, help, vista promossi).
-    - Eventi/Calendario: blocco in TypeScript sotto `bloc/calendar/*` con viste mensili/settimanali/giornaliere/agenda, drag & drop, header di navigazione, dialog di dettaglio e modifica eventi.
-- **Altre utilità frontend**:
-  - `lib/runtime-config.js` e `lib/utils.js` per configurazioni runtime e funzioni di supporto.
-  - `hooks/useDiscordAvatar.js`, `hooks/usePromotedMembers.js`, `hooks/useMemberFilters.js`, ecc. per logiche specifiche del dominio.
+    - Eventi/Calendario: blocco TypeScript sotto `bloc/calendar/*` con viste mensili/settimanali/giornaliere/agenda, drag & drop, header di navigazione, dialog di dettaglio e modifica eventi.
+- **Dipendenze principali**:
+  - `next: ^16.2.1`, `react: ^19.2.4`, `react-dom: ^19.2.4`
+  - `tailwindcss: ^4.1.17`, `@radix-ui/*` (11 pacchetti)
+  - `react-dnd`, `react-day-picker`, `react-hook-form`, `zod`, `lucide-react`
+
+---
 
 ### Backend (Node.js + Express)
 
 - **Entrypoint**:
-  - `backend/server.ts`: server HTTP Express che:
+  - `backend/server.ts` (~3753 righe): server HTTP Express su porta 5000 che:
     - gestisce healthcheck (`/api/health`, `/api/v1/health`);
-    - implementa un proxy/integrazione con l’API pubblica RSI (scraping HTML con `cheerio`, caching via `backend/lib/cache.js`);
-    - usa middleware di sicurezza (`helmet`, `cors`, rate limiting), logging (`backend/lib/logger.ts`), versioning API (`backend/lib/versioning.ts`) e configurazione MongoDB (`backend/lib/config.ts`).
+    - implementa proxy/scraping RSI (`/api/v1/rsi/orgs/:handle` con `cheerio`, caching Redis);
+    - gestisce autenticazione JWT (`/api/v1/auth/*`);
+    - gest CRUD membri, eventi, deleted members, promoted members;
+    - gestisce admin Discord (start/stop bot, sync membri, storico job);
+    - espone endpoint sync per bot (`/api/v1/sync/*`);
+    - usa middleware: helmet, cors, rate limiting, JSON parser, versioning API, Winston logger.
 - **Modelli dati (MongoDB/Mongoose)**:
-  - `backend/models/Member.js`, `PromotedMember.js`, `DeletedMember.js`, `User.js`, `Event.js`.
-- **Routing applicativo**:
-  - `backend/routes/members.js`: gestione CRUD e logiche relative ai membri.
-  - `backend/routes/auth.js`: flusso di autenticazione basato su JWT/ruoli.
-- **Script di manutenzione / import** (`backend/scripts/*.js`):
-  - Import e deduplicazione membri (`import-members.js`, `deduplicate-members.js`, `clear-members.js`, `delete-test-members.js`).
-  - Integrazione con bot Discord (`discord-bot.js`, `test-bot-logic.js`, `restart-backend.js`).
-  - Import eventi da bot (`import-bot-events.js`).
-- **Testing backend**:
-  - `backend/tests/*.js` con test di fumo, integrazione base e test sui modelli/lib.
-- **Documentazione backend**:
-  - `backend/ANALISI_BACKEND.md` e `backend/ANALISI_BACKEND_v2.md` descrivono più in dettaglio flussi API, sicurezza e decisioni architetturali.
+  - `Member.js`: membri attivi (key, index, tag, name, id Discord, date, idoneita, watchdog, promoted, affiliazioniOrg, orgValidation, note, richiami).
+  - `DeletedMember.js`: audit trail soft-delete (con deletedAt, deletedBy, deletionReasons).
+  - `PromotedMember.js`: membri promossi a LSE/OPERATORE (promotedAt, promotedBy, promotionReason).
+  - `User.js`: utenti web app (username, password hash, rsiHandle, rsiVerified, organizationRank).
+  - `Event.js`: eventi calendario (title, description, date, startTime, endTime, location, type).
+  - `DiscordSyncRun.js`: storico esecuzioni sync (jobId, mode, status, result, startedAt, finishedAt).
+- **Librerie utility**:
+  - `lib/config.ts`: setup MongoDB, validazione env.
+  - `lib/logger.ts`: Winston logger strutturato con rotazione file.
+  - `lib/cache.js`: wrapper Redis (fallback graceful se non disponibile).
+  - `lib/versioning.ts`: middleware versioning API (v1, v2...).
+  - `lib/parseMembers.js`: parser CSV/TXT per import membri.
+  - `lib/discordMemberSync.js`: `DiscordMemberSyncService` per sync batch membri Discord.
+  - `lib/swagger.js`: generazione specifiche OpenAPI.
+- **Script**:
+  - `scripts/discord-bot.js`: bot persistente (start/stop da UI, real-time sync su `guildMemberUpdate`, kick membri).
+  - `scripts/sync-discord-members.js`: script CLI per sync manuale (dry-run/live).
+  - `scripts/import-bot-events.js`: import eventi da formato bot Discord.
+  - Script manutenzione: `import-members.js`, `deduplicate-members.js`, `clear-members.js`, `delete-test-members.js`.
+- **Testing**:
+  - `backend/tests/*.js` con Jest (smoke test, integrazione, modelli/lib).
+- **Dipendenze principali**:
+  - `express`, `mongoose`, `jsonwebtoken`, `bcryptjs`, `redis`
+  - `discord.js`, `cheerio`, `multer`, `winston`
+  - `helmet`, `cors`, `express-rate-limit`, `express-validator`
+  - `swagger-jsdoc`, `swagger-ui-express`
 
-### Stato attuale (branch `feat/nextjs-migration`)
+---
 
-- Il branch corrente (`feat/nextjs-migration`) è **ahead di 1 commit** rispetto a `origin/feat/nextjs-migration` e rappresenta la migrazione in corso a **Next.js**:
-  - `package.json` già aggiornato a:
-    - `"next": "^16.2.1"`, `"react": "^19.2.4"`, `"react-dom": "^19.2.4"`;
-    - stack moderno con Tailwind 4 e Radix UI.
-  - Presenza simultanea di:
-    - vecchia struttura React SPA (`App.jsx`, `views/*`, route components sotto `components/app/*`);
-    - nuova struttura Next app router (`src/app/...`).
-- Il file `docs/ANALISI.md` fotografa ancora il frontend come app React + Vite; concettualmente è corretto sulla logica di dominio, ma **non è aggiornato sul framework di rendering (ora Next.js)**.
+### Deployment
 
-### Cosa è già funzionante (in base al codice)
+- **Docker**: build multi-stage che produce un singolo container con Next.js (porta 3000) + Express (porta 5000).
+- **Kubernetes**: manifest presenti in `k3s/` per orchestrazione container.
+- **Variabili ambiente chiave**:
+  - `MONGODB_URI`, `JWT_SECRET`, `API_KEY`
+  - `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_WEBHOOK_URL`
+  - `REDIS_URL` (opzionale), `CORS_ORIGIN`, `NODE_ENV`, `PORT`
+
+---
+
+### Cosa è già funzionante
 
 - **Gestione membri**:
-  - Caricamento file `.txt/.csv` via backend Express (upload con `multer` in memory).
-  - Parsificazione file in `backend/lib/parseMembers.js`.
-  - Persistenza in MongoDB (`Member`, `PromotedMember`, `DeletedMember`) con logiche per promozioni, soft-delete, deduplicazione.
-  - Nel frontend: componenti per lista, filtri, ricerche, dettagli, dialog di conferma e modali per aggiunta/cancellazione.
+  - Upload file `.txt/.csv` con multer + parsing in `parseMembers.js`.
+  - Persistenza MongoDB (`Member`, `PromotedMember`, `DeletedMember`) con promozioni, soft-delete, deduplicazione.
+  - Frontend: lista, filtri, ricerca, dettagli, modali aggiunta/cancellazione, vista promossi.
 - **Sistema di autenticazione**:
-  - Backend con JWT (`JWT_SECRET`), utenti in `User.js`, middleware di protezione route.
-  - Frontend con `useAuth`, `authService.js` e route/pagine di login integrate (`app/login/page.jsx`, `components/app/login-route.jsx`).
+  - JWT backend, bcrypt password hashing, rate limiting su login/register.
+  - Verifica identità RSI (codice in bio, rank org >= 4, main org = "Logistic Space Economy").
+  - Frontend: login, gestione profilo, cambio password, verifica RSI.
 - **Calendario ed eventi**:
-  - Modello `Event.js` nel backend più script di import.
-  - Blocco frontend `bloc/calendar/*` molto strutturato (tipizzato TypeScript) con:
-    - viste giorno/settimana/mese/anno, agenda;
-    - drag & drop (`dnd/*`), dialog per aggiunta/modifica/dettaglio;
-    - navigazione temporale e header personalizzabile.
+  - Modello `Event.js` + CRUD API con notifiche Discord webhook.
+  - Frontend: blocco `bloc/calendar/*` con viste giorno/settimana/mese/anno, drag & drop, dialog aggiunta/modifica.
 - **Integrazioni esterne**:
-  - RSI: endpoint `/api/v1/rsi/orgs/:handle` con scraping HTML, normalizzazione e caching.
-  - Discord: bot/script per sincronizzazione membri ed eventi, consumo integrato nei flussi di import.
+  - **RSI**: scraping HTML con Cheerio, caching Redis, validazione org.
+  - **Discord**: bot persistente con sync membri (dry-run/live), real-time sync su cambio ruoli, kick membri, storico job.
+- **Admin Discord**:
+  - Pannello admin per start/stop bot, trigger sync, visualizzazione storico esecuzioni, lista utenti registrati.
+
+---
 
 ### Lavori in corso / punti aperti
 
-- **Migrazione completa a Next.js**:
-  - Portare tutte le route utente effettive (`Home`, `Members`, `Calendar`, `Login`) sotto `src/app/...`, eliminando gradualmente i vecchi “route components” non più necessari.
-  - Aggiornare `docs/ANALISI.md` per allinearla all’uso di Next.js (o linkare questo file come “fonte aggiornata”).
-- **Pulizia tecnica**:
-  - `backend/server.ts` usa un mix di sintassi CommonJS (`require`) e TypeScript `import = require`; a lungo termine converrebbe uniformare a ES modules o puro CommonJS per coerenza.
-  - Verificare ed allineare variabili d’ambiente secondo `backend/SECRETS.md` e `backend/lib/config.ts` (soprattutto in ambienti non di sviluppo).
+- **Pulizia codice legacy**:
+  - Rimuovere `src/App.jsx`, `src/views/*`, `src/components/app/*` (sostituiti da `src/app/*`).
+  - Uniformare sintassi backend: `backend/server.ts` usa mix CommonJS (`require`) e TypeScript `import = require`.
 - **Qualità e test**:
-  - Ampliare la suite di test frontend (attualmente il focus dei test è sul backend).
-  - Verificare che i flussi critici (login, caricamento membri, calendario) siano coperti da smoke test end-to-end o almeno integrazione.
+  - Ampliare suite test frontend (focus attuale sul backend).
+  - Coprire flussi critici (login, upload membri, calendario) con smoke test end-to-end.
+- **Documentazione API**:
+  - Rifinire Swagger (`backend/lib/swagger.js`) per tenere specifiche aggiornate.
+  - Valutare endpoint `/version` tramite `backend/lib/versioning.ts`.
+- **Sicurezza**:
+  - Verificare e allineare variabili d'ambiente secondo `backend/SECRETS.md` e `backend/lib/config.ts` (soprattutto produzione).
+
+---
 
 ### Prossimi passi suggeriti
 
 - **Frontend**:
-  - Consolidare l’uso di `src/app/*` come unica fonte di routing e rimuovere step by step componenti legacy non più usati.
-  - Estrarre/riusare le `views/*` dove hanno ancora senso, ma come puro “page content” chiamato dalle pagine Next.
+  - Consolidare `src/app/*` come unica fonte di routing.
+  - Rimuovere componenti legacy non più usati.
 - **Backend**:
-  - Valutare se esporre un endpoint “/version” o simile sfruttando `backend/lib/versioning.ts` per tracciare meglio lo stato della API.
-  - Rifinire la documentazione Swagger (`backend/lib/swagger.js`) per tenere aggiornate le specifiche.
+  - Uniformare moduli a ES modules o puro CommonJS.
+  - Espandere copertura test.
+- **Infrastruttura**:
+  - Configurare CI/CD per build Docker automatico.
+  - Setup monitoring e alerting per produzione.
+  - Configurare backup automatici MongoDB.
 
-Questo file rappresenta lo **snapshot aggiornato** (maggio 2026) dello stato del progetto e può essere esteso in futuro con sezioni dedicate a deployment, monitoraggio e flussi operativi.
+---
 
+Questo file rappresenta lo **snapshot aggiornato** (maggio 2026) dello stato del progetto.
+Branch corrente: `disocrd_role_edit_and_kick`.
