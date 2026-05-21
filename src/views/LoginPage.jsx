@@ -284,7 +284,11 @@ export default function LoginPage() {
                                             </svg>
                                             <span className="text-sm text-red-600 dark:text-red-400 font-medium">Le password non coincidono</span>
                                         </>
-                                    )}\n                                </div>\n                            )}\n                        </div>\n                    )}
+                                    )}
+                                    </div>
+                                 )}
+                                 </div>
+                                )}
 
                     {isLogin && (
                         <div className="flex items-center">
