@@ -1489,6 +1489,14 @@ app.post('/api/v1/auth/verify-rsi-code', checkMongoConnection, authenticateToken
                                 const spanClasses = $(span).attr('class') || '';
                                 console.log(`     Span ${i + 1}: class="${spanClasses}"`);
                             });
+
+                            // Avvia il server
+                            const PORT = process.env.PORT || 5000;
+                            app.listen(PORT, async () => {
+                                logger.info(`🚀 Server avviato su porta ${PORT}`);
+                                logger.info(` Ambiente: ${process.env.NODE_ENV || 'development'}`);
+                                logger.info(`🔗 Swagger UI: http://localhost:${PORT}/api/v1/docs`);
+                            });
                         }
                     }
                 }
