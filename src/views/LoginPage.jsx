@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getApiBaseUrl } from '../lib/runtime-config';
 
@@ -10,8 +10,23 @@ export default function LoginPage() {
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [rememberMe, setRememberMe] = useState(false);
+    const [passwordChecks, setPasswordChecks] = useState({
+        length: false,
+        uppercase: false,
+        lowercase: false,
+        number: false,
+    });
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        setPasswordChecks({
+            length: password.length >= 6,
+            uppercase: /[A-Z]/.test(password),
+            lowercase: /[a-z]/.test(password),
+            number: /\d/.test(password),
+        });
+    }, [password]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -30,15 +45,22 @@ export default function LoginPage() {
             return;
         }
 
+        if (!isLogin) {
+            const allChecks = Object.values(passwordChecks).every(Boolean);
+            if (!allChecks) {
+                setError('La password non soddisfa tutti i requisiti');
+                setLoading(false);
+                return;
+            }
+        }
+
         try {
             if (isLogin) {
                 const result = await login(username, password, rememberMe);
                 if (!result.success) {
                     setError(result.error || 'Errore nel login');
                 }
-                // Se success, il login gestisce la navigazione tramite AuthContext
             } else {
-                // Registrazione
                 if (!rsiApiUrl || rsiApiUrl.trim() === '') {
                     setError('URL del server non configurato. Controlla le impostazioni.');
                     setLoading(false);
@@ -59,7 +81,6 @@ export default function LoginPage() {
                     try {
                         data = await response.json();
                     } catch (jsonError) {
-                        // Se la risposta non è JSON valido
                         if (!response.ok) {
                             setError(`Errore nella registrazione: ${response.status} ${response.statusText}`);
                             setLoading(false);
@@ -69,7 +90,6 @@ export default function LoginPage() {
                     }
 
                     if (response.ok && data.success) {
-                        // Dopo la registrazione, effettua automaticamente il login
                         const loginResult = await login(username, password, rememberMe);
                         if (!loginResult.success) {
                             setError(loginResult.error || 'Registrazione completata ma login fallito');
@@ -87,7 +107,6 @@ export default function LoginPage() {
             }
         } catch (error) {
             console.error('Errore:', error);
-            // Mostra un messaggio più descrittivo
             if (error.message && error.message.includes('connettersi al server')) {
                 setError(error.message);
             } else if (error.message && error.message.includes('non configurato')) {
@@ -163,6 +182,25 @@ export default function LoginPage() {
                             required
                             disabled={loading}
                         />
+                        {!isLogin && (
+                            <div className="mt-2 space-y-1">
+                                <p className="text-xs text-gray-500 dark:text-gray-400">La password deve contenere:</p>
+                                <ul className="text-xs space-y-0.5">
+                                    <li className={passwordChecks.length ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                        {passwordChecks.length ? '✓' : '○'} Minimo 6 caratteri
+                                    </li>
+                                    <li className={passwordChecks.uppercase ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                        {passwordChecks.uppercase ? '✓' : '○'} Almeno una lettera maiuscola
+                                    </li>
+                                    <li className={passwordChecks.lowercase ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                        {passwordChecks.lowercase ? '✓' : '○'} Almeno una lettera minuscola
+                                    </li>
+                                    <li className={passwordChecks.number ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                                        {passwordChecks.number ? '✓' : '○'} Almeno un numero
+                                    </li>
+                                </ul>
+                            </div>
+                        )}
                     </div>
 
                     {!isLogin && (
@@ -225,6 +263,7 @@ export default function LoginPage() {
                             setError('');
                             setPassword('');
                             setConfirmPassword('');
+                            setPasswordChecks({ length: false, uppercase: false, lowercase: false, number: false });
                         }}
                         className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
                         disabled={loading}
@@ -238,4 +277,3 @@ export default function LoginPage() {
         </div>
     );
 }
-
