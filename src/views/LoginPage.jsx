@@ -61,7 +61,8 @@ export default function LoginPage() {
                     setError(result.error || 'Errore nel login');
                 }
             } else {
-                if (!rsiApiUrl || rsiApiUrl.trim() === '') {
+                // Nota: rsiApiUrl può essere una stringa vuota "" in produzione (per URL relativi via Traefik)
+                if (rsiApiUrl === undefined || rsiApiUrl === null) {
                     setError('URL del server non configurato. Controlla le impostazioni.');
                     setLoading(false);
                     return;

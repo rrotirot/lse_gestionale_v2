@@ -11,7 +11,9 @@ export const authService = {
     async login(username, password) {
         const rsiApiUrl = getApiBaseUrl();
         // Verifica che l'URL sia valido
-        if (!rsiApiUrl || rsiApiUrl.trim() === '') {
+        // Nota: rsiApiUrl può essere una stringa vuota "" in produzione (per URL relativi via Traefik)
+        // quindi controlliamo solo se è undefined o null
+        if (rsiApiUrl === undefined || rsiApiUrl === null) {
             throw new Error('URL del server non configurato. Controlla le impostazioni.');
         }
 
