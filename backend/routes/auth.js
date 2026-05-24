@@ -45,7 +45,13 @@ const authenticateToken = (req, res, next) => {
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) {
-            logger.error('Token verification error', { error: err.message });
+            logger.error('Token verification error', {
+                error: err.message,
+                errorCode: err.code || 'UNKNOWN',
+                tokenLength: token.length,
+                secretLength: JWT_SECRET.length,
+                path: req.path
+            });
             return res.status(403).json({
                 success: false,
                 error: 'Token non valido o scaduto.'

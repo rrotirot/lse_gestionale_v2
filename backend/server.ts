@@ -34,6 +34,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change_me_in_prod';
 const API_KEY = process.env.API_KEY || 'default_api_key';
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/lse-members';
 
+// Log JWT_SECRET configuration (without exposing the actual secret)
+if (JWT_SECRET === 'change_me_in_prod') {
+    console.warn('⚠️  WARNING: JWT_SECRET is using default value "change_me_in_prod" - this is UNSAFE in production!');
+} else {
+    console.log(`✓ JWT_SECRET loaded from environment (length: ${JWT_SECRET.length} chars)`);
+}
+
 // Opzioni di connessione MongoDB
 const mongooseOptions = {
     serverSelectionTimeoutMS: 30000,
@@ -45,6 +52,51 @@ const mongooseOptions = {
 };
 
 const app = express();
+
+// =========================================================================
+// MIDDLEWARE CONFIGURATION
+// =========================================================================
+
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_DEVELOPMENT = NODE_ENV === 'development';
+const RATE_LIMIT_DISABLED = process.env.RATE_LIMIT_DISABLED === 'true';
+const HELMET_DISABLED = process.env.HELMET_DISABLED === 'true';
+
+// CORS Configuration - Open in dev, restricted in production
+const corsOptions = {
+    origin: process.env.CORS_ORIGIN || '*',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+};
+app.use(cors(corsOptions));
+
+// Security Headers - Disabled in development for flexibility
+if (!HELMET_DISABLED) {
+    app.use(helmet({
+        contentSecurityPolicy: IS_DEVELOPMENT ? false : true,
+        crossOriginEmbedderPolicy: IS_DEVELOPMENT ? false : true,
+    }));
+}
+
+// Body parsing middleware
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Request logging
+app.use(requestLogger);
+
+// Rate Limiting - Disabled in development mode
+if (!RATE_LIMIT_DISABLED) {
+    const generalLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100, // limit each IP to 100 requests per windowMs
+        message: 'Troppi richeste da questo IP, riprova tra 15 minuti.',
+    });
+    app.use('/api', generalLimiter);
+} else {
+    console.warn('⚠️  Rate limiting is DISABLED - development mode');
+}
 
 // Configurazione multer per upload file
 // Usiamo memoryStorage per evitare salvataggi permanenti su disco.

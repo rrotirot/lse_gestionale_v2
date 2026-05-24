@@ -1,0 +1,100 @@
+version: '3.8'
+
+# =========================================================================
+# LOCAL DEVELOPMENT DOCKER COMPOSE
+# Fornisce MongoDB, Redis e altri servizi per lo sviluppo locale
+# =========================================================================
+# Uso: docker-compose up -d
+
+services:
+  # --- MongoDB per Development ---
+  mongodb:
+    image: mongo:7.0-alpine
+    container_name: lse-mongodb-dev
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpassword
+      MONGO_INITDB_DATABASE: lse-members
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - lse-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: mongod --auth
+    restart: unless-stopped
+
+  # --- Redis per Cache ---
+  redis:
+    image: redis:7-alpine
+    container_name: lse-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - lse-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- MongoDB Express (UI optional) ---
+  # Interfaccia web per gestire MongoDB (opzionale, commentato)
+  # mongo-express:
+  #   image: mongo-express:latest
+  #   container_name: lse-mongo-express
+  #   environment:
+  #     ME_CONFIG_MONGODB_ADMINUSERNAME: root
+  #     ME_CONFIG_MONGODB_ADMINPASSWORD: rootpassword
+  #     ME_CONFIG_MONGODB_URL: mongodb://root:rootpassword@mongodb:27017/
+  #   ports:
+  #     - "8081:8081"
+  #   depends_on:
+  #     - mongodb
+  #   networks:
+  #     - lse-network
+  #   restart: unless-stopped
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  lse-network:
+    driver: bridge
+
+# =========================================================================
+# USAGE
+# =========================================================================
+# Start services:
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f mongodb
+#   docker-compose logs -f redis
+#
+# Stop services:
+#   docker-compose down
+#
+# Remove volumes (WARNING: deletes data):
+#   docker-compose down -v
+#
+# Connect to MongoDB from CLI:
+#   mongosh --host localhost --port 27017 -u root -p rootpassword
+#
+# Connect to Redis from CLI:
+#   redis-cli -h localhost -p 6379
+# =========================================================================

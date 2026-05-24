@@ -77,6 +77,12 @@ export function AuthProvider({ children }) {
                          setIsAuthenticated(true);
                      } else {
                          // Token non valido, rimuovi credenziali
+                         console.error('Token verification failed on app startup:', {
+                             error: data.error,
+                             storageType,
+                             tokenLength: token.length,
+                             timestamp: new Date().toISOString()
+                         });
                          localStorage.removeItem('authToken');
                          localStorage.removeItem('user');
                          localStorage.removeItem('rememberMe');
@@ -85,7 +91,13 @@ export function AuthProvider({ children }) {
                      }
                  })
                  .catch((error) => {
-                     console.error('Errore nella verifica token:', error);
+                     console.error('Token verification request failed:', {
+                         message: error.message,
+                         storageType,
+                         tokenLength: token.length,
+                         apiUrl: rsiApiUrl,
+                         timestamp: new Date().toISOString()
+                     });
                      localStorage.removeItem('authToken');
                      localStorage.removeItem('user');
                      localStorage.removeItem('rememberMe');

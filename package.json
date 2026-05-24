@@ -7,7 +7,12 @@
         "build": "next build",
         "start": "next start",
         "preview": "next start",
-        "typecheck": "tsc --noEmit"
+        "typecheck": "tsc --noEmit",
+        "dev:backend": "cd backend && npm run dev",
+        "dev:db": "docker-compose up -d",
+        "dev:db:stop": "docker-compose down",
+        "dev:db:logs": "docker-compose logs -f",
+        "dev:full": "concurrently \"npm run dev\" \"npm run dev:backend\" --names \"frontend,backend\" --prefix-colors \"cyan,blue\""
     },
     "dependencies": {
         "@hookform/resolvers": "^5.2.2",
