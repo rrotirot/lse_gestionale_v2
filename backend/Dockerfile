@@ -35,6 +35,8 @@ COPY --from=builder /app/lib/discordMemberSync.js ./dist/lib
 COPY --from=builder /app/lib/parseMembers.js ./dist/lib
 COPY --from=builder /app/lib/swagger.js ./dist/lib
 
+RUN mkdir -p /app/uploads && chown -R nodeapp:nodejs /app/uploads
+
 USER nodeapp
 
 EXPOSE 5000
