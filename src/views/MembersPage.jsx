@@ -84,6 +84,25 @@ export default function MembersPage({ onNavigateToHome }) {
     const [showBackToTop, setShowBackToTop] = useState(false);
     const [checkingDb, setCheckingDb] = useState(false);
     const [resettingAllValidation, setResettingAllValidation] = useState(false);
+    
+    // Memoized filtered arrays to avoid IIFEs in JSX (fixes Turbopack/React 19 compiler issues)
+    const lsePFiltered = useMemo(() => {
+        return selectedTag === 'Tutti' ? filtered.filter(m => m.tag === 'LSE-P') : selectedTag === 'LSE-P' ? filtered : [];
+    }, [filtered, selectedTag]);
+
+    const lseFiltered = useMemo(() => {
+        return selectedTag === 'Tutti' ? filtered.filter(m => m.tag === 'LSE') : selectedTag === 'LSE' ? filtered : [];
+    }, [filtered, selectedTag]);
+
+    const operatoreFiltered = useMemo(() => {
+        return selectedTag === 'Tutti' ? filtered.filter(m => m.tag === 'OPERATORE') : selectedTag === 'OPERATORE' ? filtered : [];
+    }, [filtered, selectedTag]);
+
+    const otherTagsFiltered = useMemo(() => {
+        return selectedTag === 'Tutti'
+            ? filtered.filter(m => m.tag !== 'LSE-P' && m.tag !== 'LSE' && m.tag !== 'OPERATORE')
+            : (selectedTag !== 'LSE-P' && selectedTag !== 'LSE' && selectedTag !== 'OPERATORE') ? filtered : [];
+    }, [filtered, selectedTag]);
 
     // Carica i membri quando la pagina viene montata
     useEffect(() => {
@@ -401,78 +420,64 @@ export default function MembersPage({ onNavigateToHome }) {
                 {!loading && !error && (
                     <>
                         {/* Membri LSE-P */}
-                        {(() => {
-                            const lsePFiltered = selectedTag === 'Tutti' ? filtered.filter(m => m.tag === 'LSE-P') : selectedTag === 'LSE-P' ? filtered : [];
-                            return lsePFiltered.length > 0 && (
-                                <div className="mb-8">
-                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                        <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
-                                        Membri LSE-P ({lsePFiltered.length})
-                                    </h4>
-                                    <MemberList
-                                        members={lsePFiltered}
-                                        onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
-                                        discordBotToken={discordBotToken}
-                                    />
-                                </div>
-                            );
-                        })()}
+                        {lsePFiltered.length > 0 && (
+                            <div className="mb-8">
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                                    <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
+                                    Membri LSE-P ({lsePFiltered.length})
+                                </h4>
+                                <MemberList
+                                    members={lsePFiltered}
+                                    onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
+                                    discordBotToken={discordBotToken}
+                                />
+                            </div>
+                        )}
 
                         {/* Membri LSE */}
-                        {(() => {
-                            const lseFiltered = selectedTag === 'Tutti' ? filtered.filter(m => m.tag === 'LSE') : selectedTag === 'LSE' ? filtered : [];
-                            return lseFiltered.length > 0 && (
-                                <div className="mb-8">
-                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                        <span className="w-3 h-3 bg-green-500 rounded-full"></span>
-                                        Membri LSE ({lseFiltered.length})
-                                    </h4>
-                                    <MemberList
-                                        members={lseFiltered}
-                                        onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
-                                        discordBotToken={discordBotToken}
-                                    />
-                                </div>
-                            );
-                        })()}
+                        {lseFiltered.length > 0 && (
+                            <div className="mb-8">
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                                    <span className="w-3 h-3 bg-green-500 rounded-full"></span>
+                                    Membri LSE ({lseFiltered.length})
+                                </h4>
+                                <MemberList
+                                    members={lseFiltered}
+                                    onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
+                                    discordBotToken={discordBotToken}
+                                />
+                            </div>
+                        )}
 
                         {/* Membri OPERATORE */}
-                        {(() => {
-                            const operatoreFiltered = selectedTag === 'Tutti' ? filtered.filter(m => m.tag === 'OPERATORE') : selectedTag === 'OPERATORE' ? filtered : [];
-                            return operatoreFiltered.length > 0 && (
-                                <div className="mb-8">
-                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                        <span className="w-3 h-3 bg-purple-500 rounded-full"></span>
-                                        Membri OPERATORE ({operatoreFiltered.length})
-                                    </h4>
-                                    <MemberList
-                                        members={operatoreFiltered}
-                                        onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
-                                        discordBotToken={discordBotToken}
-                                    />
-                                </div>
-                            );
-                        })()}
+                        {operatoreFiltered.length > 0 && (
+                            <div className="mb-8">
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                                    <span className="w-3 h-3 bg-purple-500 rounded-full"></span>
+                                    Membri OPERATORE ({operatoreFiltered.length})
+                                </h4>
+                                <MemberList
+                                    members={operatoreFiltered}
+                                    onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
+                                    discordBotToken={discordBotToken}
+                                />
+                            </div>
+                        )}
 
                         {/* Altri Membri */}
-                        {(() => {
-                            const otherTagsFiltered = selectedTag === 'Tutti'
-                                ? filtered.filter(m => m.tag !== 'LSE-P' && m.tag !== 'LSE' && m.tag !== 'OPERATORE')
-                                : (selectedTag !== 'LSE-P' && selectedTag !== 'LSE' && selectedTag !== 'OPERATORE') ? filtered : [];
-                            return otherTagsFiltered.length > 0 && (
-                                <div className="mb-8">
-                                    <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                        <span className="w-3 h-3 bg-gray-500 rounded-full"></span>
-                                        Altri Membri ({otherTagsFiltered.length})
-                                    </h4>
-                                    <MemberList
-                                        members={otherTagsFiltered}
-                                        onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
-                                        discordBotToken={discordBotToken}
-                                    />
-                                </div>
-                            );
-                        })()}
+                        {otherTagsFiltered.length > 0 && (
+                            <div className="mb-8">
+                                <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                                    <span className="w-3 h-3 bg-gray-500 rounded-full"></span>
+                                    Altri Membri ({otherTagsFiltered.length})
+                                </h4>
+                                <MemberList
+                                    members={otherTagsFiltered}
+                                    onMemberSelect={(m) => setSelectedMemberKey(m?.key ?? null)}
+                                    discordBotToken={discordBotToken}
+                                />
+                            </div>
+                        )}
 
                         {/* Se non ci sono membri filtrati */}
                         {filtered.length === 0 && (

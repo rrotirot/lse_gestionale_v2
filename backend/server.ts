@@ -59,15 +59,15 @@ const app = express();
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_DEVELOPMENT = NODE_ENV === 'development';
-const RATE_LIMIT_DISABLED = process.env.RATE_LIMIT_DISABLED === 'true';
+const RATE_LIMIT_DISABLED = process.env.RATE_LIMIT_DISABLED === 'true' || IS_DEVELOPMENT;
 const HELMET_DISABLED = process.env.HELMET_DISABLED === 'true';
 
 // CORS Configuration - Open in dev, restricted in production
 const corsOptions = {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: process.env.CORS_ORIGIN || (process.env.NODE_ENV === 'production' ? false : '*'),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
 };
 app.use(cors(corsOptions));
 
@@ -650,18 +650,6 @@ const checkMongoConnection = (req, res, next) => {
 
 // ==================== MIDDLEWARE DI SICUREZZA ====================
 
-// Helmet: aggiunge header di sicurezza HTTP
-app.use(helmet());
-
-// CORS configurato (per produzione limitare gli origin)
-const corsOptions = {
-    origin: process.env.CORS_ORIGIN || (process.env.NODE_ENV === 'production' ? false : '*'), // In produzione, impostare a URL specifico o false per bloccare
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
-};
-app.use(cors(corsOptions));
-
 // Forza HTTPS in produzione
 if (process.env.NODE_ENV === 'production') {
     app.use((req, res, next) => {
@@ -674,14 +662,16 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Rate limiting globale (protezione generale)
-const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minuti
-    max: 100000, // max 100 richieste per IP
-    message: 'Troppi tentativi, riprova più tardi',
-    standardHeaders: true,
-    legacyHeaders: false
-});
-app.use(globalLimiter);
+if (!RATE_LIMIT_DISABLED) {
+    const globalLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minuti
+        max: 100000, // max 100 richieste per IP
+        message: 'Troppi tentativi, riprova più tardi',
+        standardHeaders: true,
+        legacyHeaders: false
+    });
+    app.use(globalLimiter);
+}
 
 // Rate limiting per login (più restrittivo)
 const loginLimiter = rateLimit({
@@ -711,7 +701,7 @@ const strictLimiter = rateLimit({
     legacyHeaders: false
 });
 
-app.use(express.json());
+
 
 // ==================== DEBUG LOG (DEV ONLY) ====================
 // Minimal client-side debug events appended to `debug-3fb3f6.log` in repo root.
@@ -2551,6 +2541,14 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
         const { key } = req.params;
         const updateData = req.body;
 
+        const currentMember = await Member.findOne({ key: parseInt(key) });
+        if (!currentMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro non trovato'
+            });
+        }
+
         // Rimuovi _id e createdAt se presenti per evitare conflitti
         delete updateData._id;
         delete updateData.createdAt;
@@ -2570,6 +2568,22 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
                 updateData.watchdog = true;
                 updateData.idoneita = false;
             }
+        }
+
+        // Sincronizzazione ruolo su Discord se il tag cambia (eseguita in background per non bloccare la risposta HTTP)
+        const tagChanged = updateData.tag !== undefined && updateData.tag !== currentMember.tag;
+        if (tagChanged && currentMember.id) {
+            discordBot.updateMemberRole(currentMember.id, updateData.tag)
+                .then((syncResult: any) => {
+                    if (syncResult.success) {
+                        console.log(`✅ Ruolo Discord aggiornato con successo per ${currentMember.name} (nuovo tag: ${updateData.tag})`);
+                    } else {
+                        console.warn(`⚠️ Errore durante l'aggiornamento del ruolo Discord: ${syncResult.error}`);
+                    }
+                })
+                .catch((discordErr: any) => {
+                    console.error(`❌ Errore critico nel sync del ruolo Discord per ${currentMember.name}:`, discordErr);
+                });
         }
 
         // Log per verificare che orgValidation venga salvata
@@ -3727,6 +3741,113 @@ app.post('/api/v1/admin/discord/sync-members', authenticateToken, checkMongoConn
         success: true,
         jobId,
         message: 'Job di sincronizzazione accodato con successo.'
+    });
+});
+
+// Apply DB changes to Discord members job
+app.post('/api/v1/admin/discord/apply-changes', authenticateToken, checkMongoConnection, requireAdmin, async (req: any, res: any) => {
+    // Check if there is already an active job running to avoid concurrency
+    for (const job of activeJobs.values()) {
+        if (job.status === 'running') {
+            return res.status(409).json({
+                success: false,
+                error: 'Un job di sincronizzazione o applicazione modifiche è già in esecuzione.'
+            });
+        }
+    }
+
+    const jobId = `job_apply_${Date.now()}`;
+    const startedAt = new Date();
+    
+    activeJobs.set(jobId, {
+        jobId,
+        mode: 'live',
+        status: 'running',
+        progress: 10,
+        startedAt,
+    });
+
+    const username = req.user?.username || 'admin';
+    
+    // Fire and forget, but handle internally
+    (async () => {
+        try {
+            // Ensure bot is initialized and ready
+            if (!discordBot.isReady) {
+                const initSuccess = await discordBot.initialize();
+                if (!initSuccess) {
+                    throw new Error('Impossibile inizializzare il bot Discord.');
+                }
+            }
+
+            activeJobs.set(jobId, {
+                ...activeJobs.get(jobId),
+                progress: 40
+            });
+
+            const report = await discordBot.applyAllRolesToDiscord();
+
+            activeJobs.set(jobId, {
+                ...activeJobs.get(jobId),
+                progress: 100,
+                status: report.success ? 'completed' : 'failed',
+                finishedAt: new Date(),
+                result: report
+            });
+
+            await DiscordSyncRun.create({
+                jobId,
+                triggeredBy: username,
+                mode: 'apply-changes',
+                status: report.success ? 'completed' : 'failed',
+                result: {
+                    readFromDiscord: report.processed || 0,
+                    skippedBots: 0,
+                    added: 0,
+                    updated: report.updated || 0,
+                    unchanged: report.unchanged || 0,
+                    errors: report.errors || []
+                },
+                startedAt,
+                finishedAt: new Date()
+            });
+
+        } catch (error: any) {
+            activeJobs.set(jobId, {
+                ...activeJobs.get(jobId),
+                progress: 100,
+                status: 'failed',
+                finishedAt: new Date(),
+                error: error?.message || String(error)
+            });
+
+            try {
+                await DiscordSyncRun.create({
+                    jobId,
+                    triggeredBy: username,
+                    mode: 'apply-changes',
+                    status: 'failed',
+                    result: {
+                        readFromDiscord: 0,
+                        skippedBots: 0,
+                        added: 0,
+                        updated: 0,
+                        unchanged: 0,
+                        errors: [error?.message || String(error)]
+                    },
+                    startedAt,
+                    finishedAt: new Date()
+                });
+            } catch (dbErr) {
+                console.error('Errore nel salvataggio del run di applicazione modifiche fallito:', dbErr);
+            }
+        }
+    })();
+
+    return res.json({
+        success: true,
+        jobId,
+        message: 'Job di applicazione modifiche accodato con successo.'
     });
 });
 

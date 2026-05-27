@@ -3,6 +3,30 @@ const { logger } = require('../lib/logger');
 const Member = require('../models/Member');
 
 const DEFAULT_TAG = process.env.DISCORD_SYNC_DEFAULT_TAG || 'LSE-P';
+const NAME_SOURCE = process.env.DISCORD_SYNC_NAME_SOURCE || 'displayName';
+
+function cleanMemberName(name) {
+    if (!name) return '';
+    return name
+        .replace(/\[\s*(LSE-P|P-LSE|LSE|OPERATORE)\s*\]/gi, '')
+        .replace(/\(\s*(LSE-P|P-LSE|LSE|OPERATORE)\s*\)/gi, '')
+        .replace(/\{\s*(LSE-P|P-LSE|LSE|OPERATORE)\s*\}/gi, '')
+        .replace(/\b(LSE-P|P-LSE|LSE|OPERATORE)\s*[\-|\|]\s*/gi, '')
+        .replace(/\s*[\-|\|]\s*(LSE-P|P-LSE|LSE|OPERATORE)\b/gi, '')
+        .replace(/\b(LSE-P|P-LSE|LSE)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function pickName(discordMember, nameSource) {
+    let name = '';
+    if (nameSource === 'displayName' && discordMember.displayName) {
+        name = discordMember.displayName;
+    } else {
+        name = discordMember.user?.username || '';
+    }
+    return cleanMemberName(name);
+}
 
 function determineTag(discordMember, defaultTag) {
     if (!discordMember || !discordMember.roles || !discordMember.roles.cache) {
@@ -92,6 +116,23 @@ class DiscordBot {
                 if (result) {
                     logger.info(`[Real-time Sync] Updated tag to '${newTag}' in DB for member ${newMember.user.tag}`);
                 }
+
+                // Se l'utente ha il ruolo OPERATORE o tag LSE, aggiorniamo il nickname su Discord
+                try {
+                    const currentNickname = newMember.nickname || newMember.displayName || newMember.user?.username || '';
+                    const cleanName = cleanMemberName(currentNickname);
+                    if (cleanName) {
+                        const tagUpper = String(newTag).toUpperCase();
+                        const tagPrefix = (tagUpper === 'LSE' || tagUpper === 'OPERATORE') ? 'LSE' : tagUpper;
+                        const newNickname = `[${tagPrefix}] ${cleanName}`;
+                        if (newMember.nickname !== newNickname) {
+                            await newMember.setNickname(newNickname);
+                            logger.info(`Updated nickname for Discord user ${newMember.user.id} to: "${newNickname}" via guildMemberUpdate`);
+                        }
+                    }
+                } catch (nickError) {
+                    logger.warn(`Failed to update nickname for Discord user ${newMember.user.id} via guildMemberUpdate: ${nickError.message}`);
+                }
             } catch (error) {
                 logger.error(`Error handling guildMemberUpdate for ${newMember.user.id}:`, error);
             }
@@ -149,19 +190,39 @@ class DiscordBot {
                 const existing = existingById.get(memberId);
 
                 if (existing) {
-                    if (existing.tag !== currentTag) {
-                        await Member.updateOne({ id: memberId }, { $set: { tag: currentTag } });
+                    const cleanName = pickName(member, NAME_SOURCE);
+                    const nameChanged = existing.name !== cleanName;
+                    if (existing.tag !== currentTag || nameChanged) {
+                        await Member.updateOne({ id: memberId }, { $set: { tag: currentTag, name: cleanName } });
                         updated++;
                     } else {
                         skipped++;
                     }
+
+                    // Se l'utente ha il ruolo OPERATORE o tag LSE, aggiorniamo il nickname su Discord
+                    try {
+                        const currentNickname = member.nickname || member.displayName || member.user?.username || '';
+                        const cleanNameNick = cleanMemberName(currentNickname);
+                        if (cleanNameNick) {
+                            const tagUpper = String(currentTag).toUpperCase();
+                            const tagPrefix = (tagUpper === 'LSE' || tagUpper === 'OPERATORE') ? 'LSE' : tagUpper;
+                            const newNickname = `[${tagPrefix}] ${cleanNameNick}`;
+                            if (member.nickname !== newNickname) {
+                                await member.setNickname(newNickname);
+                                logger.info(`Updated nickname for Discord user ${memberId} to: "${newNickname}" via syncMembers`);
+                            }
+                        }
+                    } catch (nickError) {
+                        logger.warn(`Failed to update nickname for Discord user ${memberId} via syncMembers: ${nickError.message}`);
+                    }
+
                     continue;
                 }
 
                 // Create new member
                 const memberData = {
                     key: ++maxKey,
-                    name: member.user.username,
+                    name: pickName(member, NAME_SOURCE),
                     id: memberId,
                     tag: currentTag,
                     index: '',
@@ -206,6 +267,123 @@ class DiscordBot {
         } catch (error) {
             logger.error(`Failed to kick member ${discordId}:`, error);
             return { success: false, error: error.message };
+        }
+    }
+
+    async updateMemberRole(discordId, newTag) {
+        if (!this.isReady || !this.guild) {
+            logger.warn('Discord bot not ready, skipping role update');
+            return { success: false, error: 'Bot not ready' };
+        }
+
+        try {
+            const member = await this.guild.members.fetch(discordId);
+            if (!member) {
+                logger.warn(`Member ${discordId} not found in guild for role update`);
+                return { success: false, error: 'Member not found in Discord server' };
+            }
+
+            const tagUpper = String(newTag).toUpperCase();
+            const roleLsePNames = ['LSE-P', 'P-LSE'];
+            const roleLseNames = ['LSE', 'OPERATORE'];
+
+            const roleLseP = this.guild.roles.cache.find(r => roleLsePNames.includes(String(r.name).toUpperCase()));
+            const roleLse = this.guild.roles.cache.find(r => roleLseNames.includes(String(r.name).toUpperCase()));
+
+            if (tagUpper === 'LSE' || tagUpper === 'OPERATORE') {
+                if (roleLse) {
+                    await member.roles.add(roleLse);
+                    logger.info(`Added role ${roleLse.name} to Discord user ${member.user.tag}`);
+                } else {
+                    logger.warn(`Role LSE/OPERATORE not found on Discord server`);
+                }
+
+                if (roleLseP && member.roles.cache.has(roleLseP.id)) {
+                    await member.roles.remove(roleLseP);
+                    logger.info(`Removed role ${roleLseP.name} from Discord user ${member.user.tag}`);
+                }
+            } else if (tagUpper === 'LSE-P' || tagUpper === 'P-LSE') {
+                if (roleLseP) {
+                    await member.roles.add(roleLseP);
+                    logger.info(`Added role ${roleLseP.name} to Discord user ${member.user.tag}`);
+                } else {
+                    logger.warn(`Role LSE-P/P-LSE not found on Discord server`);
+                }
+
+                if (roleLse && member.roles.cache.has(roleLse.id)) {
+                    await member.roles.remove(roleLse);
+                    logger.info(`Removed role ${roleLse.name} from Discord user ${member.user.tag}`);
+                }
+            }
+
+            // Aggiorna anche il nickname su Discord per riflettere il cambio tag (es. [LSE-P] Name -> [LSE] Name)
+            try {
+                const currentNickname = member.nickname || member.displayName || member.user?.username || '';
+                const cleanName = cleanMemberName(currentNickname);
+                if (cleanName) {
+                    const tagPrefix = (tagUpper === 'LSE' || tagUpper === 'OPERATORE') ? 'LSE' : tagUpper;
+                    const newNickname = `[${tagPrefix}] ${cleanName}`;
+                    if (member.nickname !== newNickname) {
+                        await member.setNickname(newNickname);
+                        logger.info(`Updated nickname for Discord user ${discordId} to: "${newNickname}"`);
+                    }
+                }
+            } catch (nickError) {
+                logger.warn(`Failed to update nickname for Discord user ${discordId}: ${nickError.message}`);
+            }
+
+            return { success: true };
+        } catch (error) {
+            logger.error(`Failed to update roles for Discord user ${discordId}:`, error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    async applyAllRolesToDiscord() {
+        if (!this.isReady || !this.guild) {
+            throw new Error('Bot not ready');
+        }
+
+        logger.info('Starting to apply database changes (roles & nicknames) to Discord...');
+        
+        try {
+            const members = await Member.find({ id: { $ne: '', $exists: true } });
+            logger.info(`Found ${members.length} members with Discord ID in DB`);
+
+            let successCount = 0;
+            let failCount = 0;
+            const errors = [];
+
+            for (const member of members) {
+                try {
+                    const res = await this.updateMemberRole(member.id, member.tag);
+                    if (res.success) {
+                        successCount++;
+                    } else {
+                        failCount++;
+                        errors.push(`${member.name} (${member.id}): ${res.error}`);
+                    }
+                    // Introduce a tiny delay (100ms) to avoid rate limits
+                    await new Promise(r => setTimeout(r, 100));
+                } catch (err) {
+                    failCount++;
+                    errors.push(`${member.name} (${member.id}): ${err.message}`);
+                }
+            }
+
+            logger.info(`Apply DB to Discord completed: ${successCount} successful, ${failCount} failed`);
+            return {
+                success: true,
+                processed: members.length,
+                added: 0,
+                updated: successCount,
+                unchanged: 0,
+                failed: failCount,
+                errors
+            };
+        } catch (error) {
+            logger.error('Failed to apply database roles to Discord:', error);
+            throw error;
         }
     }
 

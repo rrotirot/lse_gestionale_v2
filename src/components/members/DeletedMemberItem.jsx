@@ -13,6 +13,12 @@ export default function DeletedMemberItem({ member, discordBotToken, onRestore, 
         minute: '2-digit'
     }) : 'N/A';
 
+    const reasons = member.deletionReasons && member.deletionReasons.length > 0
+        ? member.deletionReasons
+        : (member.orgValidation?.issues && member.orgValidation.issues.length > 0
+            ? member.orgValidation.issues
+            : []);
+
     return (
         <div
             key={member._id || member.key}
@@ -48,34 +54,22 @@ export default function DeletedMemberItem({ member, discordBotToken, onRestore, 
                         <p className="text-gray-700 dark:text-gray-300">
                             <span className="font-medium">Data eliminazione:</span> {formattedDate}
                         </p>
-                        {(() => {
-                            // Mostra le motivazioni se presenti, altrimenti usa i problemi di validazione come fallback
-                            const reasons = member.deletionReasons && member.deletionReasons.length > 0
-                                ? member.deletionReasons
-                                : (member.orgValidation?.issues && member.orgValidation.issues.length > 0
-                                    ? member.orgValidation.issues
-                                    : []);
-                            
-                            if (reasons.length > 0) {
-                                return (
-                                    <div className="mt-2">
-                                        <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                            {member.deletionReasons && member.deletionReasons.length > 0
-                                                ? 'Motivazioni eliminazione:'
-                                                : 'Problemi di validazione (motivazione implicita):'}
-                                        </p>
-                                        <ul className="list-disc list-inside space-y-1 ml-2">
-                                            {reasons.map((reason, index) => (
-                                                <li key={index} className="text-red-600 dark:text-red-400 text-sm">
-                                                    {reason}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                );
-                            }
-                            return null;
-                        })()}
+                        {reasons.length > 0 && (
+                            <div className="mt-2">
+                                <p className="font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    {member.deletionReasons && member.deletionReasons.length > 0
+                                        ? 'Motivazioni eliminazione:'
+                                        : 'Problemi di validazione (motivazione implicita):'}
+                                </p>
+                                <ul className="list-disc list-inside space-y-1 ml-2">
+                                    {reasons.map((reason, index) => (
+                                        <li key={index} className="text-red-600 dark:text-red-400 text-sm">
+                                            {reason}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
                         {member.note && (
                             <p className="text-gray-600 dark:text-gray-400 mt-2">
                                 <span className="font-medium">Note:</span> {member.note}

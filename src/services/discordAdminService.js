@@ -123,4 +123,20 @@ export const discordAdminService = {
         }
         return response.json();
     },
+
+    /**
+     * Trigger apply changes job (push DB to Discord)
+     */
+    async triggerApplyChanges() {
+        const rsiApiUrl = getApiBaseUrl();
+        const response = await fetch(`${rsiApiUrl}/api/v1/admin/discord/apply-changes`, {
+            method: 'POST',
+            headers: this._getHeaders(),
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Errore sconosciuto' }));
+            throw new Error(error.error || `Errore nell'avvio dell'applicazione modifiche: ${response.status}`);
+        }
+        return response.json();
+    },
 };

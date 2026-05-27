@@ -70,7 +70,7 @@ export function useMemberDetail(selectedMember, onMemberUpdate, deleteMemberFunc
     const handleIdoneitaToggle = useCallback(async (newValue) => {
         if (!selectedMember) return;
 
-        if (selectedMember.promoted === true || selectedMember.tag === 'LSE') {
+        if (selectedMember.promoted === true || selectedMember.tag === 'LSE' || selectedMember.tag === 'OPERATORE') {
             console.warn('⚠️ Impossibile modificare idoneità: membro promosso');
             return;
         }
@@ -260,7 +260,7 @@ export function useMemberDetail(selectedMember, onMemberUpdate, deleteMemberFunc
     const togglePromotion = useCallback(async () => {
         if (!selectedMember) return;
 
-        const isPromoted = selectedMember.promoted || selectedMember.tag === 'LSE';
+        const isPromoted = selectedMember.promoted || selectedMember.tag === 'LSE' || selectedMember.tag === 'OPERATORE';
         const updatedMember = {
             ...selectedMember,
             tag: isPromoted ? 'LSE-P' : 'LSE',

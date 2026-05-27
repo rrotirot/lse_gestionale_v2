@@ -271,6 +271,26 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
     }
   };
 
+  const triggerApplyChanges = async () => {
+    try {
+      setError(null);
+      const data = await discordAdminService.triggerApplyChanges();
+      if (data.success && data.jobId) {
+        setJobState({
+          active: true,
+          jobId: data.jobId,
+          mode: "live",
+          progress: 10,
+          status: "queued",
+          result: null,
+          error: null
+        });
+      }
+    } catch (err) {
+      setError(err.message || "Errore nell'avvio dell'applicazione modifiche");
+    }
+  };
+
   // Modal creazione/pianificazione job
   const JobModal = () => (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setShowJobModal(false)}>
@@ -500,6 +520,13 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
                 className={`w-full rounded-lg px-4 py-2.5 bg-indigo-600 text-white font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 Sync membri (reale)
+              </button>
+              <button
+                onClick={triggerApplyChanges}
+                disabled={jobState.active || botStatus.status !== "online"}
+                className={`w-full rounded-lg px-4 py-2.5 bg-emerald-600 text-white font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                Applica modifiche a Discord
               </button>
               <button
                 onClick={() => { setJobForm(f => ({ ...f, type: "sync-members" })); setShowJobModal(true); }}

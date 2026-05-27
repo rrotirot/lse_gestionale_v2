@@ -32,6 +32,14 @@ export default function MemberDetailModal({
 
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
+    const issuesLen = Array.isArray(member.orgValidation?.issues) ? member.orgValidation.issues.length : 0;
+    // Regola UI: se c'è anche solo 1 issue, la validazione è da considerarsi FALLITA.
+    const hasValidationFailed = member.orgValidation?.isValid === false || issuesLen > 0;
+    const hasValidationPassed = member.orgValidation?.isValid === true && issuesLen === 0;
+    const isPromoted = member.promoted === true || member.tag === 'LSE' || member.tag === 'OPERATORE';
+    const canToggleIdoneita = !isPromoted && !hasValidationFailed && !member.watchdog;
+    const canToggleWatchdog = !hasValidationFailed && !member.idoneita;
+
     const handleDeleteClick = useCallback(() => {
         setShowDeleteDialog(true);
     }, []);
@@ -46,12 +54,16 @@ export default function MemberDetailModal({
     }, [deleteMember, onOpenChange]);
 
     const handlePromote = useCallback(async () => {
-        if (!member.idoneita) {
+        if (!isPromoted && !member.idoneita) {
             alert('Il membro deve essere idoneo per essere promosso a LSE.');
             return;
         }
 
-        if (!confirm(`Sei sicuro di voler promuovere "${member.name}" a LSE?\n\nIl membro verrà nascosto dalla lista principale e l'idoneità sarà bloccata.`)) {
+        const confirmMsg = isPromoted
+            ? `Sei sicuro di voler rimuovere la promozione a LSE per "${member.name}"?`
+            : `Sei sicuro di voler promuovere "${member.name}" a LSE?\n\nIl membro verrà nascosto dalla lista principale e l'idoneità sarà bloccata.`;
+
+        if (!window.confirm(confirmMsg)) {
             return;
         }
 
@@ -61,7 +73,7 @@ export default function MemberDetailModal({
         } catch (error) {
             alert(`Errore nella promozione: ${error.message}`);
         }
-    }, [member, togglePromotion]);
+    }, [member, isPromoted, togglePromotion]);
 
     const handleKeyDown = useCallback((e, action) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -69,14 +81,6 @@ export default function MemberDetailModal({
             action();
         }
     }, []);
-
-    const issuesLen = Array.isArray(member.orgValidation?.issues) ? member.orgValidation.issues.length : 0;
-    // Regola UI: se c'è anche solo 1 issue, la validazione è da considerarsi FALLITA.
-    const hasValidationFailed = member.orgValidation?.isValid === false || issuesLen > 0;
-    const hasValidationPassed = member.orgValidation?.isValid === true && issuesLen === 0;
-    const isPromoted = member.promoted === true || member.tag === 'LSE';
-    const canToggleIdoneita = !isPromoted && !hasValidationFailed && !member.watchdog;
-    const canToggleWatchdog = !hasValidationFailed && !member.idoneita;
     
     // Verifica se ci sono problemi di validazione per abilitare l'eliminazione
     const hasValidationIssues = issuesLen > 0;
@@ -88,7 +92,41 @@ export default function MemberDetailModal({
     const orgImageUrl = hasValidationPassed && member.orgValidation?.mainOrgImageUrl
         ? member.orgValidation.mainOrgImageUrl
         : null;
+    // Compute affiliation links to avoid IIFE inside JSX (fixes Turbopack/React 19 compiler crash)
+    const orgs = Array.isArray(member.orgValidation?.orgs) ? member.orgValidation.orgs : [];
+    const fromOrgs = orgs
+        .map(o => ({
+            name: String(o?.name || '').trim(),
+            handle: String(o?.handle || '').trim(),
+            url: String(o?.url || '').trim(),
+            sid: String(o?.sid || '').trim(),
+        }))
+        .map(o => ({
+            ...o,
+            name: o.name || (o.handle && !String(o.handle).startsWith('spectrum:') ? o.handle : ''),
+        }))
+        .filter(o => o.name);
 
+    const raw = String(member.orgValidation?.orgs_string || member.affiliazioniOrg || '').trim();
+    const fromString = raw
+        ? raw.split(',').map(s => s.trim()).filter(Boolean).map((name) => {
+            const norm = name.toLowerCase().replace(/\s+/g, ' ').trim();
+            const match = fromOrgs.find(o => String(o.name || '').toLowerCase().replace(/\s+/g, ' ').trim() === norm);
+            const mainName = String(member.orgValidation?.mainOrgName || '').trim();
+            const mainHandle = String(member.orgValidation?.mainOrgHandle || '').trim();
+            const mainNorm = mainName.toLowerCase().replace(/\s+/g, ' ').trim();
+            const handleFromMain = (mainHandle && mainNorm && norm === mainNorm) ? mainHandle : '';
+
+            return {
+                name,
+                handle: match?.handle || handleFromMain || '',
+                sid: match?.sid || (match?.handle && !String(match.handle).startsWith('spectrum:') ? String(match.handle) : '') || '',
+                url: match?.url || '',
+            };
+        })
+        : [];
+
+    const affiliationLinks = fromOrgs.length > 0 ? fromOrgs : fromString;
     return (
         <>
             <Dialog open={open} onOpenChange={onOpenChange}>
@@ -378,109 +416,55 @@ export default function MemberDetailModal({
                                                         Affiliazioni rilevate
                                                     </div>
                                                     <div className="mt-1">
-                                                        {(() => {
-                                                            // 1) Preferisci orgs[] (con url) se presenti
-                                                            const orgs = Array.isArray(member.orgValidation?.orgs) ? member.orgValidation.orgs : [];
-                                                            const fromOrgs = orgs
-                                                                .map(o => ({
-                                                                    name: String(o?.name || '').trim(),
-                                                                    handle: String(o?.handle || '').trim(),
-                                                                    url: String(o?.url || '').trim(),
-                                                                    sid: String(o?.sid || '').trim(),
-                                                                }))
-                                                                // se manca il nome, mostriamo comunque qualcosa (fallback su SID)
-                                                                .map(o => ({
-                                                                    ...o,
-                                                                    name: o.name || (o.handle && !String(o.handle).startsWith('spectrum:') ? o.handle : ''),
-                                                                }))
-                                                                .filter(o => o.name);
+                                                                                                                {affiliationLinks.length === 0 ? (
+                                                            <div className="text-sm font-semibold text-gray-100 break-words">
+                                                                —
+                                                            </div>
+                                                        ) : (
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {affiliationLinks.map((o, idx) => {
+                                                                    const rawUrl = String(o.url || '').trim();
+                                                                    const handle = String(o.handle || '').trim();
+                                                                    const sidRaw = String(o.sid || '').trim();
 
-                                                            // 2) Fallback: costruisci dai nomi in orgs_string / affiliazioniOrg (separati da virgola)
-                                                            // Fallback: senza SID non possiamo costruire URL affidabili.
-                                                            // In quel caso mostriamo solo testo non-link.
-                                                            const raw = String(member.orgValidation?.orgs_string || member.affiliazioniOrg || '').trim();
-                                                            const fromString = raw
-                                                                ? raw.split(',').map(s => s.trim()).filter(Boolean).map((name) => {
-                                                                    const norm = name.toLowerCase().replace(/\s+/g, ' ').trim();
+                                                                    const sidCandidate = (sidRaw && !sidRaw.startsWith('spectrum:') && sidRaw !== 'MAIN')
+                                                                        ? sidRaw
+                                                                        : '';
 
-                                                                    // Prova a trovare l'org corrispondente in orgValidation.orgs (per ricavare SID/URL)
-                                                                    const match = fromOrgs.find(o => String(o.name || '').toLowerCase().replace(/\s+/g, ' ').trim() === norm);
+                                                                    const url = sidCandidate
+                                                                        ? `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(sidCandidate)}`
+                                                                        : (rawUrl || '');
 
-                                                                    // Fallback: se coincide con la main org e abbiamo SID mainOrgHandle
-                                                                    const mainName = String(member.orgValidation?.mainOrgName || '').trim();
-                                                                    const mainHandle = String(member.orgValidation?.mainOrgHandle || '').trim();
-                                                                    const mainNorm = mainName.toLowerCase().replace(/\s+/g, ' ').trim();
-                                                                    const handleFromMain = (mainHandle && mainNorm && norm === mainNorm) ? mainHandle : '';
+                                                                    const cls = "inline-flex items-center rounded-full border border-white/20 bg-transparent px-3 py-1 text-sm font-semibold text-gray-100 relative z-10";
+                                                                    const label = sidCandidate || String(o.sid || '').trim() || o.name;
 
-                                                                    return {
-                                                                        name,
-                                                                        handle: match?.handle || handleFromMain || '',
-                                                                        sid: match?.sid || (match?.handle && !String(match.handle).startsWith('spectrum:') ? String(match.handle) : '') || '',
-                                                                        url: match?.url || '',
-                                                                    };
-                                                                })
-                                                                : [];
-
-                                                            const links = fromOrgs.length > 0 ? fromOrgs : fromString;
-
-                                                            if (links.length === 0) {
-                                                                return (
-                                                                    <div className="text-sm font-semibold text-gray-100 break-words">
-                                                                        —
-                                                                    </div>
-                                                                );
-                                                            }
-
-                                                            return (
-                                                                <div className="flex flex-wrap gap-2">
-                                                                    {links.map((o, idx) => {
-                                                                        const rawUrl = String(o.url || '').trim();
-                                                                        const handle = String(o.handle || '').trim();
-                                                                        const sidRaw = String(o.sid || '').trim();
-
-                                                                        const sidCandidate = (sidRaw && !sidRaw.startsWith('spectrum:') && sidRaw !== 'MAIN')
-                                                                            ? sidRaw
-                                                                            : '';
-
-                                                                        // Link:
-                                                                        // - se abbiamo SID estratto: usa /en/orgs/<SID>
-                                                                        // - altrimenti usa l'url già fornito dal backend (può essere /en/orgs/<handle> o spectrum)
-                                                                        const url = sidCandidate
-                                                                            ? `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(sidCandidate)}`
-                                                                            : (rawUrl || '');
-
-                                                                        const cls = "inline-flex items-center rounded-full border border-white/20 bg-transparent px-3 py-1 text-sm font-semibold text-gray-100 relative z-10";
-                                                                        // Mostra SEMPRE il SID se disponibile, altrimenti fallback al nome
-                                                                        const label = sidCandidate || String(o.sid || '').trim() || o.name;
-
-                                                                        if (!url) {
-                                                                            return (
-                                                                                <span
-                                                                                    key={`${o.handle || o.name}-${idx}`}
-                                                                                    className={`${cls} opacity-80`}
-                                                                                    title="SID non disponibile per creare il link"
-                                                                                >
-                                                                                    <span className="truncate max-w-[18rem]">{label}</span>
-                                                                                </span>
-                                                                            );
-                                                                        }
-
+                                                                    if (!url) {
                                                                         return (
-                                                                            <a
+                                                                            <span
                                                                                 key={`${o.handle || o.name}-${idx}`}
-                                                                                href={url}
-                                                                                target="_blank"
-                                                                                rel="noreferrer"
-                                                                                className={`pointer-events-auto ${cls} cursor-pointer hover:border-white/40 hover:bg-white/5 transition-colors`}
-                                                                                title="Apri organizzazione su RSI"
+                                                                                className={`${cls} opacity-80`}
+                                                                                title="SID non disponibile per creare il link"
                                                                             >
                                                                                 <span className="truncate max-w-[18rem]">{label}</span>
-                                                                            </a>
+                                                                            </span>
                                                                         );
-                                                                    })}
-                                                                </div>
-                                                            );
-                                                        })()}
+                                                                    }
+
+                                                                    return (
+                                                                        <a
+                                                                            key={`${o.handle || o.name}-${idx}`}
+                                                                            href={url}
+                                                                            target="_blank"
+                                                                            rel="noreferrer"
+                                                                            className={`pointer-events-auto ${cls} cursor-pointer hover:border-white/40 hover:bg-white/5 transition-colors`}
+                                                                            title="Apri organizzazione su RSI"
+                                                                        >
+                                                                            <span className="truncate max-w-[18rem]">{label}</span>
+                                                                        </a>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
 

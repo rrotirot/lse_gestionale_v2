@@ -12,11 +12,27 @@ function toYyyyMmDd(dateValue) {
     return d.toISOString().split('T')[0];
 }
 
+function cleanMemberName(name) {
+    if (!name) return '';
+    return name
+        .replace(/\[\s*(LSE-P|P-LSE|LSE|OPERATORE)\s*\]/gi, '')
+        .replace(/\(\s*(LSE-P|P-LSE|LSE|OPERATORE)\s*\)/gi, '')
+        .replace(/\{\s*(LSE-P|P-LSE|LSE|OPERATORE)\s*\}/gi, '')
+        .replace(/\b(LSE-P|P-LSE|LSE|OPERATORE)\s*[\-|\|]\s*/gi, '')
+        .replace(/\s*[\-|\|]\s*(LSE-P|P-LSE|LSE|OPERATORE)\b/gi, '')
+        .replace(/\b(LSE-P|P-LSE|LSE)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 function pickName(discordMember, nameSource) {
+    let name = '';
     if (nameSource === 'displayName' && discordMember.displayName) {
-        return discordMember.displayName;
+        name = discordMember.displayName;
+    } else {
+        name = discordMember.user?.username || '';
     }
-    return discordMember.user?.username || '';
+    return cleanMemberName(name);
 }
 
 function determineTag(discordMember, defaultTag) {
