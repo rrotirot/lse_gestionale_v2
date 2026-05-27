@@ -44,9 +44,7 @@
     "next-env.d.ts",
     "app/**/*",
     "src/**/*",
-    "next.config.mjs",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    "next.config.mjs"
   ],
   "exclude": [
     "node_modules",
