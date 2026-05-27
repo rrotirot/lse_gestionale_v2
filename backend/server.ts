@@ -13,6 +13,7 @@ const cheerio = require('cheerio');
 import mongoose = require('mongoose');
 const Member = require('./models/Member');
 const DeletedMember = require('./models/DeletedMember');
+const PromotedMember = require('./models/PromotedMember');
 const User = require('./models/User');
 const Event = require('./models/Event');
 const discordBot = require('./scripts/discord-bot');
@@ -2086,7 +2087,9 @@ app.post('/api/v1/members', checkMongoConnection, async (req, res) => {
 app.get('/api/v1/members', checkMongoConnection, async (req, res) => {
     try {
         console.log('📥 Richiesta GET /api/members ricevuta');
-        const members = await Member.find({}).sort({ key: 1 }).lean();
+        const regularMembers = await Member.find({}).lean();
+        const promotedMembers = await PromotedMember.find({}).lean();
+        const members = [...regularMembers, ...promotedMembers].sort((a, b) => a.key - b.key);
         console.log(`📊 Trovati ${members.length} membri nel database`);
 
         // Recupera tutti i membri eliminati per verificare quali escludere
@@ -2541,7 +2544,17 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
         const { key } = req.params;
         const updateData = req.body;
 
-        const currentMember = await Member.findOne({ key: parseInt(key) });
+        // Cerca prima nella collezione Member, poi in PromotedMember
+        let currentMember = await Member.findOne({ key: parseInt(key) });
+        let isCurrentlyPromoted = false;
+
+        if (!currentMember) {
+            currentMember = await PromotedMember.findOne({ key: parseInt(key) });
+            if (currentMember) {
+                isCurrentlyPromoted = true;
+            }
+        }
+
         if (!currentMember) {
             return res.status(404).json({
                 success: false,
@@ -2570,22 +2583,6 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
             }
         }
 
-        // Sincronizzazione ruolo su Discord se il tag cambia (eseguita in background per non bloccare la risposta HTTP)
-        const tagChanged = updateData.tag !== undefined && updateData.tag !== currentMember.tag;
-        if (tagChanged && currentMember.id) {
-            discordBot.updateMemberRole(currentMember.id, updateData.tag)
-                .then((syncResult: any) => {
-                    if (syncResult.success) {
-                        console.log(`✅ Ruolo Discord aggiornato con successo per ${currentMember.name} (nuovo tag: ${updateData.tag})`);
-                    } else {
-                        console.warn(`⚠️ Errore durante l'aggiornamento del ruolo Discord: ${syncResult.error}`);
-                    }
-                })
-                .catch((discordErr: any) => {
-                    console.error(`❌ Errore critico nel sync del ruolo Discord per ${currentMember.name}:`, discordErr);
-                });
-        }
-
         // Log per verificare che orgValidation venga salvata
         if (updateData.orgValidation) {
             console.log(`💾 Salvataggio validazione per membro key=${key}:`, {
@@ -2597,6 +2594,76 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
             });
         }
 
+        // 1. Caso PROMOZIONE: da Member a PromotedMember
+        if (updateData.promoted === true && !isCurrentlyPromoted) {
+            console.log(`🚀 Promozione membro a LSE: ${currentMember.name} (key: ${key})`);
+            const promotedMemberData = {
+                ...currentMember.toObject(),
+                ...updateData,
+                tag: 'LSE', // I membri promossi hanno tag LSE
+                idoneita: true, // I membri promossi sono sempre idonei
+                promoted: true,
+                promotedAt: new Date(),
+                promotedBy: (req as any).user?.username || (req as any).user?.email || 'system',
+                originalMemberId: currentMember._id,
+                promotionReason: updateData.promotionReason || '',
+                updatedAt: new Date()
+            };
+
+            delete promotedMemberData._id;
+            delete promotedMemberData.__v;
+
+            const promotedMember = await PromotedMember.create(promotedMemberData);
+            await Member.findByIdAndDelete(currentMember._id);
+
+            return res.json({
+                success: true,
+                member: promotedMember,
+                message: 'Membro promosso con successo'
+            });
+        }
+
+        // 2. Caso RIMOZIONE PROMOZIONE (DEMOTION): da PromotedMember a Member
+        if (updateData.promoted === false && isCurrentlyPromoted) {
+            console.log(`📉 Rimozione promozione membro da LSE: ${currentMember.name} (key: ${key})`);
+            const memberData = {
+                ...currentMember.toObject(),
+                ...updateData,
+                tag: updateData.tag || 'LSE-P', // Tag di rientro (tipicamente LSE-P)
+                promoted: false,
+                updatedAt: new Date()
+            };
+
+            delete memberData._id;
+            delete memberData.__v;
+            delete memberData.promotedAt;
+            delete memberData.promotedBy;
+            delete memberData.originalMemberId;
+
+            const restoredMember = await Member.create(memberData);
+            await PromotedMember.findByIdAndDelete(currentMember._id);
+
+            return res.json({
+                success: true,
+                member: restoredMember,
+                message: 'Membro rimosso dalla promozione con successo'
+            });
+        }
+
+        // 3. Caso AGGIORNAMENTO MEMBRO PROMOSSO
+        if (isCurrentlyPromoted) {
+            const promotedMember = await PromotedMember.findOneAndUpdate(
+                { key: parseInt(key) },
+                { $set: updateData },
+                { new: true, upsert: false }
+            );
+            return res.json({
+                success: true,
+                member: promotedMember
+            });
+        }
+
+        // 4. Caso AGGIORNAMENTO MEMBRO NORMALE
         const member = await Member.findOneAndUpdate(
             { key: parseInt(key) },
             { $set: updateData },
@@ -2619,8 +2686,193 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
             success: true,
             member: member
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Errore nell\'aggiornamento membro:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// ========================= PROMOTED MEMBERS ENDPOINTS =========================
+
+// GET /api/v1/promoted-members - Ottieni tutti i membri promossi
+app.get('/api/v1/promoted-members', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        console.log('📥 Richiesta GET /api/promoted-members ricevuta');
+
+        const {
+            tag,
+            search,
+            sortBy = 'promotedAt',
+            sortOrder = 'desc',
+            limit = 100
+        } = req.query;
+
+        let query: any = {};
+
+        // Filtro per tag
+        if (tag) {
+            query.tag = tag;
+        }
+
+        // Ricerca per nome
+        if (search) {
+            query.name = { $regex: search, $options: 'i' };
+        }
+
+        let sortOptions: any = {};
+        sortOptions[sortBy] = sortOrder === 'desc' ? -1 : 1;
+
+        const promotedMembers = await PromotedMember
+            .find(query)
+            .sort(sortOptions)
+            .limit(parseInt(limit))
+            .lean();
+
+        console.log(`📊 Trovati ${promotedMembers.length} membri promossi`);
+
+        return res.json({
+            success: true,
+            members: promotedMembers,
+            total: promotedMembers.length
+        });
+    } catch (error: any) {
+        console.error('Errore nel recupero membri promossi:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// GET /api/v1/promoted-members/:key - Ottieni un membro promosso specifico
+app.get('/api/v1/promoted-members/:key', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { key } = req.params;
+
+        const promotedMember = await PromotedMember.findOne({ key: parseInt(key) }).lean();
+
+        if (!promotedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro promosso non trovato'
+            });
+        }
+
+        return res.json({
+            success: true,
+            member: promotedMember
+        });
+    } catch (error: any) {
+        console.error('Errore nel recupero membro promosso:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// PUT /api/v1/promoted-members/:key - Aggiorna un membro promosso
+app.put('/api/v1/promoted-members/:key', checkMongoConnection, async (req: any, res: any) => {
+    try {
+        const { key } = req.params;
+        const updateData = req.body;
+
+        // Rimuovi campi protetti
+        delete updateData._id;
+        delete updateData.createdAt;
+        delete updateData.promotedAt;
+        delete updateData.originalMemberId;
+        updateData.updatedAt = new Date();
+
+        const promotedMember = await PromotedMember.findOneAndUpdate(
+            { key: parseInt(key) },
+            { $set: updateData },
+            { new: true, upsert: false }
+        );
+
+        if (!promotedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro promosso non trovato'
+            });
+        }
+
+        return res.json({
+            success: true,
+            member: promotedMember
+        });
+    } catch (error: any) {
+        console.error('Errore nell\'aggiornamento membro promosso:', error);
+        return res.status(500).json({
+            success: false,
+            error: error.message || 'Errore interno del server'
+        });
+    }
+});
+
+// DELETE /api/v1/promoted-members/:key - Elimina un membro promosso (spostalo nei deleted-members)
+app.delete('/api/v1/promoted-members/:key', strictLimiter, checkMongoConnection, authenticateToken, async (req: any, res: any) => {
+    try {
+        const { key } = req.params;
+        const { deletionReasons } = req.body || {};
+
+        // Trova il membro promosso da eliminare
+        const promotedMember = await PromotedMember.findOne({ key: parseInt(key) });
+
+        if (!promotedMember) {
+            return res.status(404).json({
+                success: false,
+                error: 'Membro promosso non trovato'
+            });
+        }
+
+        // Recupera l'username dell'utente autenticato
+        const deletedByUsername = req.user?.username || req.user?.email || 'system';
+        const deletedAt = new Date();
+
+        // Prepara i motivi di eliminazione
+        let finalDeletionReasons = [];
+        if (Array.isArray(deletionReasons)) {
+            finalDeletionReasons = deletionReasons;
+        } else if (typeof deletionReasons === 'string') {
+            finalDeletionReasons = [deletionReasons];
+        }
+
+        // Crea il record nel database eliminati
+        const deletedMemberData = {
+            ...promotedMember.toObject(),
+            deletedAt: deletedAt,
+            deletedBy: deletedByUsername,
+            deletionReasons: finalDeletionReasons,
+            originalCreatedAt: promotedMember.createdAt,
+            originalUpdatedAt: promotedMember.updatedAt
+        };
+
+        // Rimuovi campi non necessari per il deleted member
+        delete deletedMemberData._id;
+        delete deletedMemberData.__v;
+        delete deletedMemberData.promotedAt;
+        delete deletedMemberData.promotedBy;
+        delete deletedMemberData.originalMemberId;
+
+        const deletedMember = await DeletedMember.create(deletedMemberData);
+
+        // Rimuovi il membro promosso dalla collezione originale
+        await PromotedMember.findOneAndDelete({ key: parseInt(key) });
+
+        console.log(`✅ Membro promosso key=${key} (${promotedMember.name}) eliminato e spostato nei deleted-members`);
+
+        return res.json({
+            success: true,
+            message: 'Membro promosso eliminato con successo',
+            deletedAt: deletedAt,
+            member: deletedMember
+        });
+    } catch (error: any) {
+        console.error('Errore nella rimozione membro promosso:', error);
         return res.status(500).json({
             success: false,
             error: error.message || 'Errore interno del server'
@@ -3506,7 +3758,7 @@ app.get('/api/v1/admin/discord/status', authenticateToken, requireAdmin, async (
             status: 'unconfigured',
             guildName: null,
             guildId: null,
-            version: 'v0.1.0-beta'
+            version: 'v0.1.1-beta'
         });
     }
 
@@ -3517,7 +3769,7 @@ app.get('/api/v1/admin/discord/status', authenticateToken, requireAdmin, async (
             status: 'online',
             guildName: discordBot.guild.name,
             guildId: discordBot.guild.id,
-            version: 'v0.1.0-beta',
+            version: 'v0.1.1-beta',
             latency: discordBot.client ? discordBot.client.ws.ping : null,
             wsPing: discordBot.client ? discordBot.client.ws.ping : null
         });
@@ -3530,7 +3782,7 @@ app.get('/api/v1/admin/discord/status', authenticateToken, requireAdmin, async (
             status: 'loading',
             guildName: null,
             guildId: guildId,
-            version: 'v0.1.0-beta'
+            version: 'v0.1.1-beta'
         });
     }
 
@@ -3540,7 +3792,7 @@ app.get('/api/v1/admin/discord/status', authenticateToken, requireAdmin, async (
         status: 'offline',
         guildName: null,
         guildId: guildId,
-        version: 'v0.1.0-beta'
+        version: 'v0.1.1-beta'
     });
 });
 

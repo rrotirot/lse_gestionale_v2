@@ -371,19 +371,19 @@ export default function MembersPage({ onNavigateToHome }) {
 
             <div className="w-full max-w-[1700px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
                 {/* Loading o Error */}
-                {loading && filtered.length === 0 && (
+                {loading && filtered.length === 0 ? (
                     <LoadingSpinner message="Caricamento membri..." />
-                )}
+                ) : null}
 
-                {error && filtered.length === 0 && (
+                {error && filtered.length === 0 ? (
                     <ErrorMessage
                         error={error}
                         onRetry={refreshMembers}
                     />
-                )}
+                ) : null}
 
                 {/* Azioni */}
-                {!loading && (
+                {!loading ? (
                     <div className="flex items-center justify-between gap-4 mb-4">
                         <div className="flex items-center gap-4 flex-1">
                             <div className="max-w-[42rem] flex-1">
@@ -414,13 +414,13 @@ export default function MembersPage({ onNavigateToHome }) {
                             disabled={loading}
                         />
                     </div>
-                )}
+                ) : null}
 
                 {/* Lista membri */}
-                {!loading && !error && (
+                {!loading && !error ? (
                     <>
                         {/* Membri LSE-P */}
-                        {lsePFiltered.length > 0 && (
+                        {lsePFiltered.length > 0 ? (
                             <div className="mb-8">
                                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                                     <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
@@ -432,10 +432,10 @@ export default function MembersPage({ onNavigateToHome }) {
                                     discordBotToken={discordBotToken}
                                 />
                             </div>
-                        )}
+                        ) : null}
 
                         {/* Membri LSE */}
-                        {lseFiltered.length > 0 && (
+                        {lseFiltered.length > 0 ? (
                             <div className="mb-8">
                                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                                     <span className="w-3 h-3 bg-green-500 rounded-full"></span>
@@ -447,10 +447,10 @@ export default function MembersPage({ onNavigateToHome }) {
                                     discordBotToken={discordBotToken}
                                 />
                             </div>
-                        )}
+                        ) : null}
 
                         {/* Membri OPERATORE */}
-                        {operatoreFiltered.length > 0 && (
+                        {operatoreFiltered.length > 0 ? (
                             <div className="mb-8">
                                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                                     <span className="w-3 h-3 bg-purple-500 rounded-full"></span>
@@ -462,10 +462,10 @@ export default function MembersPage({ onNavigateToHome }) {
                                     discordBotToken={discordBotToken}
                                 />
                             </div>
-                        )}
+                        ) : null}
 
                         {/* Altri Membri */}
-                        {otherTagsFiltered.length > 0 && (
+                        {otherTagsFiltered.length > 0 ? (
                             <div className="mb-8">
                                 <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                                     <span className="w-3 h-3 bg-gray-500 rounded-full"></span>
@@ -477,17 +477,17 @@ export default function MembersPage({ onNavigateToHome }) {
                                     discordBotToken={discordBotToken}
                                 />
                             </div>
-                        )}
+                        ) : null}
 
                         {/* Se non ci sono membri filtrati */}
-                        {filtered.length === 0 && (
+                        {filtered.length === 0 ? (
                             <EmptyState
                                 title="Nessun membro trovato"
                                 message="Non ci sono membri che corrispondono ai filtri selezionati."
                             />
-                        )}
+                        ) : null}
                     </>
-                )}
+                ) : null}
             </div>
 
             {/* Modals */}

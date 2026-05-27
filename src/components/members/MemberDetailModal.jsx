@@ -31,6 +31,7 @@ export default function MemberDetailModal({
     } = useMemberDetail(member, onMemberUpdate, deleteMemberFunction);
 
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    const [showPromoteConfirm, setShowPromoteConfirm] = useState(false);
 
     const issuesLen = Array.isArray(member.orgValidation?.issues) ? member.orgValidation.issues.length : 0;
     // Regola UI: se c'è anche solo 1 issue, la validazione è da considerarsi FALLITA.
@@ -53,27 +54,23 @@ export default function MemberDetailModal({
         }
     }, [deleteMember, onOpenChange]);
 
-    const handlePromote = useCallback(async () => {
+    const handlePromote = useCallback(() => {
+        console.log('🔘 handlePromote cliccato! isPromoted:', isPromoted, 'member.idoneita:', member?.idoneita, 'member:', member);
         if (!isPromoted && !member.idoneita) {
             alert('Il membro deve essere idoneo per essere promosso a LSE.');
             return;
         }
+        setShowPromoteConfirm(true);
+    }, [member, isPromoted]);
 
-        const confirmMsg = isPromoted
-            ? `Sei sicuro di voler rimuovere la promozione a LSE per "${member.name}"?`
-            : `Sei sicuro di voler promuovere "${member.name}" a LSE?\n\nIl membro verrà nascosto dalla lista principale e l'idoneità sarà bloccata.`;
-
-        if (!window.confirm(confirmMsg)) {
-            return;
-        }
-
+    const executePromotion = useCallback(async () => {
         try {
             const message = await togglePromotion();
-            alert(message);
+            setShowPromoteConfirm(false);
         } catch (error) {
             alert(`Errore nella promozione: ${error.message}`);
         }
-    }, [member, isPromoted, togglePromotion]);
+    }, [togglePromotion]);
 
     const handleKeyDown = useCallback((e, action) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -168,13 +165,13 @@ export default function MemberDetailModal({
                                 {(member.name || '?').split(' ').map(x => x[0]).slice(0, 2).join('').toUpperCase()}
                             </div>
                         )}
-                        {orgImageUrl && (
+                        {orgImageUrl ? (
                             <img
                                 src={orgImageUrl}
                                 alt="Organizzazione"
                                 className="w-16 h-16 rounded-full object-cover ring-2 ring-cyan-500"
                             />
-                        )}
+                        ) : null}
                         <div className="flex-1">
                             <div className="mb-3">
                                 <label className="block text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300/80 mb-1">
@@ -216,12 +213,12 @@ export default function MemberDetailModal({
                                     </div>
                                 </div>
                             </div>
-                            {member.date && (
+                            {member.date ? (
                                 <div className="mt-2 text-xs text-gray-600 dark:text-gray-400">
                                     <span className="font-semibold text-gray-700 dark:text-gray-300">Data ingresso Discord:</span>{' '}
                                     <span className="text-gray-700 dark:text-gray-200">{member.date}</span>
                                 </div>
-                            )}
+                            ) : null}
                         </div>
                     </div>
                     </div>
@@ -237,25 +234,23 @@ export default function MemberDetailModal({
                                 ? 'border-red-500/40 dark:border-red-500/35 bg-red-500/[0.03]'
                                 : 'border-gray-200 dark:border-gray-700'
                         }`}>
-                            {!canToggleIdoneita && (
-                                <>
-                                    <div
-                                        aria-hidden="true"
-                                        className="pointer-events-none absolute inset-0 bg-[radial-gradient(transparent_1px,rgba(239,68,68,0.08)_1px)] [background-size:10px_10px] opacity-40"
-                                    />
-                                </>
-                            )}
+                            {!canToggleIdoneita ? (
+                                <div
+                                    aria-hidden="true"
+                                    className="pointer-events-none absolute inset-0 bg-[radial-gradient(transparent_1px,rgba(239,68,68,0.08)_1px)] [background-size:10px_10px] opacity-40"
+                                />
+                            ) : null}
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                                         Idoneità
                                     </label>
-                                    {!canToggleIdoneita && (
+                                    {!canToggleIdoneita ? (
                                         <span className="inline-flex items-center gap-1 rounded-full bg-red-600/20 text-red-200 border border-red-500/30 px-2 py-0.5 text-[11px] font-bold tracking-wide">
                                             <span className="text-[12px] leading-none">⛔</span>
                                             BLOCCATO
                                         </span>
-                                    )}
+                                    ) : null}
                                 </div>
                                 <button
                                     onClick={() => handleIdoneitaToggle(!member.idoneita)}
@@ -275,9 +270,13 @@ export default function MemberDetailModal({
                             </div>
                             {!canToggleIdoneita && (
                                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    {isPromoted && 'Bloccato: membro promosso'}
-                                    {hasValidationFailed && !isPromoted && 'Bloccato: validazione fallita'}
-                                    {member.watchdog && !isPromoted && !hasValidationFailed && 'Bloccato: "da tenere d\'occhio" attivo'}
+                                    {isPromoted ? (
+                                        <span>Bloccato: membro promosso</span>
+                                    ) : hasValidationFailed ? (
+                                        <span>Bloccato: validazione fallita</span>
+                                    ) : member.watchdog ? (
+                                        <span>Bloccato: "da tenere d'occhio" attivo</span>
+                                    ) : null}
                                 </p>
                             )}
                         </div>
@@ -287,25 +286,23 @@ export default function MemberDetailModal({
                                 ? 'border-red-500/40 dark:border-red-500/35 bg-red-500/[0.03]'
                                 : 'border-gray-200 dark:border-gray-700'
                         }`}>
-                            {!canToggleWatchdog && (
-                                <>
-                                    <div
-                                        aria-hidden="true"
-                                        className="pointer-events-none absolute inset-0 bg-[radial-gradient(transparent_1px,rgba(239,68,68,0.08)_1px)] [background-size:10px_10px] opacity-40"
-                                    />
-                                </>
-                            )}
+                            {!canToggleWatchdog ? (
+                                <div
+                                    aria-hidden="true"
+                                    className="pointer-events-none absolute inset-0 bg-[radial-gradient(transparent_1px,rgba(239,68,68,0.08)_1px)] [background-size:10px_10px] opacity-40"
+                                />
+                            ) : null}
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                                         Da tenere d'occhio
                                     </label>
-                                    {!canToggleWatchdog && (
+                                    {!canToggleWatchdog ? (
                                         <span className="inline-flex items-center gap-1 rounded-full bg-red-600/20 text-red-200 border border-red-500/30 px-2 py-0.5 text-[11px] font-bold tracking-wide">
                                             <span className="text-[12px] leading-none">⛔</span>
                                             BLOCCATO
                                         </span>
-                                    )}
+                                    ) : null}
                                 </div>
                                 <button
                                     onClick={() => handleDaTenereDOcchioToggle(!member.watchdog)}
@@ -325,8 +322,11 @@ export default function MemberDetailModal({
                             </div>
                             {!canToggleWatchdog && (
                                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    {hasValidationFailed && 'Bloccato: validazione fallita'}
-                                    {member.idoneita && !hasValidationFailed && 'Bloccato: idoneità attiva'}
+                                    {hasValidationFailed ? (
+                                        <span>Bloccato: validazione fallita</span>
+                                    ) : member.idoneita ? (
+                                        <span>Bloccato: idoneità attiva</span>
+                                    ) : null}
                                 </p>
                             )}
                         </div>
@@ -368,7 +368,7 @@ export default function MemberDetailModal({
                                 Validazione organizzazioni RSI
                             </h3>
                             <div className="flex gap-2">
-                                {!hasValidationPassed && (
+                                {!hasValidationPassed ? (
                                     <button
                                         onClick={validateMember}
                                         disabled={loadingOrgValidation}
@@ -376,15 +376,15 @@ export default function MemberDetailModal({
                                     >
                                         {loadingOrgValidation ? 'Validazione...' : 'Valida'}
                                     </button>
-                                )}
-                                {member.orgValidation && (
+                                ) : null}
+                                {member.orgValidation ? (
                                     <button
                                         onClick={resetValidation}
                                         className="px-3 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
                                     >
                                         Resetta Validazione
                                     </button>
-                                )}
+                                ) : null}
                             </div>
                         </div>
                         {loadingOrgValidation ? (
@@ -489,7 +489,7 @@ export default function MemberDetailModal({
                                             </div>
 
                                             {/* Quick facts */}
-                                            {member.orgValidation && (
+                                            {member.orgValidation ? (
                                                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                     <div className="rounded-md border border-white/5 bg-white/5 px-3 py-2">
                                                         <div className="text-[11px] text-gray-300/80">Main org</div>
@@ -497,7 +497,7 @@ export default function MemberDetailModal({
                                                             <div className="text-sm font-semibold text-gray-100 break-words">
                                                                 {member.orgValidation.mainOrgName || '—'}
                                                             </div>
-                                                            {member.orgValidation?.mainOrgUrl && (
+                                                            {member.orgValidation?.mainOrgUrl ? (
                                                                 <a
                                                                     href={member.orgValidation.mainOrgUrl}
                                                                     target="_blank"
@@ -507,7 +507,7 @@ export default function MemberDetailModal({
                                                                 >
                                                                     Apri
                                                                 </a>
-                                                            )}
+                                                            ) : null}
                                                         </div>
                                                     </div>
                                                     <div className="rounded-md border border-white/5 bg-white/5 px-3 py-2">
@@ -535,9 +535,9 @@ export default function MemberDetailModal({
                                                         </div>
                                                     </div>
                                                 </div>
-                                            )}
+                                            ) : null}
 
-                                            {member.orgValidation?.issues && member.orgValidation.issues.length > 0 && (
+                                            {member.orgValidation?.issues && member.orgValidation.issues.length > 0 ? (
                                                 <div className="mt-4 rounded-md border border-red-500/25 bg-red-500/10 p-3">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <div className="text-xs font-semibold text-red-200">
@@ -556,14 +556,14 @@ export default function MemberDetailModal({
                                                         ))}
                                                     </ul>
                                                 </div>
-                                            )}
+                                            ) : null}
 
                                             {/* Hint */}
-                                            {hasValidationFailed && (
+                                            {hasValidationFailed ? (
                                                 <div className="mt-3 text-[11px] text-gray-300/90">
                                                     Suggerimento: correggi la main org su RSI oppure assicurati di avere una sola organizzazione.
                                                 </div>
-                                            )}
+                                            ) : null}
                                         </div>
                                     </div>
                                 ) : (
@@ -611,7 +611,7 @@ export default function MemberDetailModal({
                 </div>
 
                 {/* Footer sticky (semi-trasparente per effetto meno "staccato") */}
-                <div className="relative pt-2 ui-float--subtle flex flex-wrap gap-2 items-center px-4 sm:px-6 pb-3 overflow-hidden">
+                <div className="relative z-50 pt-2 ui-float--subtle flex flex-wrap gap-2 items-center px-4 sm:px-6 pb-3 overflow-hidden">
                     {/* soft separator instead of hard border */}
                     <div
                         aria-hidden="true"
@@ -621,26 +621,26 @@ export default function MemberDetailModal({
                         aria-hidden="true"
                         className="pointer-events-none absolute left-0 top-0 h-6 w-full bg-gradient-to-b from-white/6 to-transparent"
                     />
-                    {member.idoneita && !isPromoted && (
+                    {member.idoneita && !isPromoted ? (
                         <button
                             onClick={handlePromote}
-                            className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600"
+                            className="relative z-10 cursor-pointer px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 shadow-sm"
                         >
                             Promuovi a LSE
                         </button>
-                    )}
-                    {isPromoted && (
+                    ) : null}
+                    {isPromoted ? (
                         <button
                             onClick={handlePromote}
-                            className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                            className="relative z-10 cursor-pointer px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 shadow-sm"
                         >
                             Rimuovi da LSE
                         </button>
-                    )}
+                    ) : null}
                     <button
                         onClick={handleDeleteClick}
                         disabled={!canDelete}
-                        className={`px-4 py-2 bg-red-500 text-white rounded shadow-md hover:bg-red-600 hover:shadow-lg transition-all duration-200 ml-auto ${
+                        className={`relative z-10 cursor-pointer px-4 py-2 bg-red-500 text-white rounded shadow-md hover:bg-red-600 hover:shadow-lg transition-all duration-200 ml-auto ${
                             !canDelete ? 'opacity-50 cursor-not-allowed' : ''
                         }`}
                         title={!canDelete ? 'Il membro deve avere almeno un problema di validazione per essere eliminato' : ''}
@@ -659,6 +659,40 @@ export default function MemberDetailModal({
                 onOpenChange={setShowDeleteDialog}
                 onConfirm={handleDeleteConfirm}
             />
+
+            {/* Dialog conferma promozione */}
+            <Dialog open={showPromoteConfirm} onOpenChange={setShowPromoteConfirm}>
+                <DialogContent className="bg-white dark:bg-[#1a1f2e] border-gray-200 dark:border-white/10 text-gray-900 dark:text-white max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-bold">
+                            {isPromoted ? 'Rimuovi Promozione' : 'Promuovi a LSE'}
+                        </DialogTitle>
+                    </DialogHeader>
+                    <div className="py-4">
+                        <p className="text-gray-700 dark:text-gray-300 whitespace-pre-line">
+                            {isPromoted
+                                ? `Sei sicuro di voler rimuovere la promozione a LSE per "${member.name}"?`
+                                : `Sei sicuro di voler promuovere "${member.name}" a LSE?\n\nIl membro verrà nascosto dalla lista principale e l'idoneità sarà bloccata.`}
+                        </p>
+                    </div>
+                    <div className="flex justify-end gap-3 mt-4">
+                        <button
+                            onClick={() => setShowPromoteConfirm(false)}
+                            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/5 rounded-md transition-colors"
+                        >
+                            Annulla
+                        </button>
+                        <button
+                            onClick={executePromotion}
+                            className={`px-4 py-2 text-sm font-medium text-white rounded-md transition-colors ${
+                                isPromoted ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                            }`}
+                        >
+                            Conferma
+                        </button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </>
     );
 }

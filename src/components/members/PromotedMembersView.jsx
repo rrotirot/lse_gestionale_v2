@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { usePromotedMembers } from '../../hooks/usePromotedMembers';
+import { useMembers } from '../../hooks/useMembers';
 import MemberDetailModal from './MemberDetailModal';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -7,7 +8,8 @@ import { Badge } from '../ui/badge';
 import { Crown, Users, RefreshCw, Trash2 } from 'lucide-react';
 
 const PromotedMembersView = () => {
-    const { promotedMembers, loading, error, deleteMember } = usePromotedMembers();
+    const { promotedMembers, loading, error, deleteMember, updateMember, refetch } = usePromotedMembers();
+    const { discordBotToken } = useMembers();
     const [selectedMember, setSelectedMember] = useState(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
 
@@ -137,16 +139,24 @@ const PromotedMembersView = () => {
                 </div>
             )}
 
-            {showDetailModal && selectedMember && (
-                <MemberDetailModal
-                    member={selectedMember}
-                    onClose={() => {
+            <MemberDetailModal
+                member={selectedMember}
+                open={showDetailModal && !!selectedMember}
+                onOpenChange={(isOpen) => {
+                    if (!isOpen) {
                         setShowDetailModal(false);
                         setSelectedMember(null);
-                    }}
-                    isPromoted={true}
-                />
-            )}
+                        refetch();
+                    }
+                }}
+                discordBotToken={discordBotToken}
+                onMemberUpdate={(updatedMember) => {
+                    // Se il tag/promozione cambia, aggiorna selectedMember e ricarica la lista
+                    setSelectedMember(updatedMember);
+                    refetch();
+                }}
+                deleteMemberFunction={deleteMember}
+            />
         </div>
     );
 };

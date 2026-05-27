@@ -24,7 +24,8 @@ function formatDateTime(dateStr) {
 
 function getRankBadge(rank) {
   if (rank === null || rank === undefined) return "bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-500";
-  if (rank >= 4) return "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300 border border-rose-200 dark:border-rose-900/45 font-bold";
+  if (rank === 5) return "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300 border border-rose-200 dark:border-rose-900/45 font-bold";
+  if (rank === 4) return "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-300 border border-rose-200 dark:border-rose-900/45 font-bold";
   if (rank === 3) return "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40";
   if (rank === 2) return "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-900/40";
   if (rank === 1) return "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300 border border-teal-200 dark:border-teal-900/40";
@@ -33,7 +34,8 @@ function getRankBadge(rank) {
 
 function getRankLabel(rank) {
   if (rank === null || rank === undefined) return "Nessuno";
-  if (rank >= 4) return `Rank ${rank} (Resposnabile di settore)`;
+  if (rank === 5) return `Rank ${rank} (Amministratore)`;
+  if (rank === 4) return `Rank ${rank} (Resposnabile di settore)`;
   if (rank === 3) return `Rank ${rank} (Operatore specializzato)`;
   if (rank === 2) return `Rank ${rank} (Operatore)`;
   if (rank === 1) return `Rank ${rank} (Prospect)`;
@@ -48,7 +50,7 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
     status: "loading",
     guildName: null,
     guildId: null,
-    version: "v0.1.0-beta"
+    version: "v0.1.1-beta"
   });
   const [jobState, setJobState] = useState({
     active: false,
@@ -96,7 +98,7 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
         status: "error",
         guildName: null,
         guildId: null,
-        version: "v0.1.0-beta",
+        version: "v0.1.1-beta",
         error: err.message
       });
     }
@@ -432,9 +434,19 @@ export default function AdminDiscordPage({ user, onLogout, onUpdateUser, onNavig
               Pannello di controllo della sincronizzazione membri ed eventi con il bot Discord.
             </p>
           </div>
-          <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
-            Attivo (Live API)
-          </span>
+          {botStatus.status === "online" ? (
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300">
+              Attivo (Bot Discord)
+            </span>
+          ) : botStatus.status === "unknown" ? (
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300">
+              Verifica in corso...
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300">
+              Offline (Bot Discord)
+            </span>
+          )}
         </div>
 
         {error && (

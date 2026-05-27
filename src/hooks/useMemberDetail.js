@@ -258,9 +258,11 @@ export function useMemberDetail(selectedMember, onMemberUpdate, deleteMemberFunc
 
     // Funzione per promuovere/rimuovere promozione
     const togglePromotion = useCallback(async () => {
+        console.log('🔄 togglePromotion avviato! selectedMember:', selectedMember);
         if (!selectedMember) return;
 
         const isPromoted = selectedMember.promoted || selectedMember.tag === 'LSE' || selectedMember.tag === 'OPERATORE';
+        console.log('🔄 togglePromotion - computed isPromoted:', isPromoted);
         const updatedMember = {
             ...selectedMember,
             tag: isPromoted ? 'LSE-P' : 'LSE',

@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 const { logger } = require('../lib/logger');
 const Member = require('../models/Member');
+const PromotedMember = require('../models/PromotedMember');
 
 const DEFAULT_TAG = process.env.DISCORD_SYNC_DEFAULT_TAG || 'LSE-P';
 const NAME_SOURCE = process.env.DISCORD_SYNC_NAME_SOURCE || 'displayName';
@@ -94,50 +95,6 @@ class DiscordBot {
             logger.error('Discord bot error:', error);
         });
 
-        // Sincronizzazione in tempo reale al cambio di ruolo su Discord
-        this.client.on('guildMemberUpdate', async (oldMember, newMember) => {
-            try {
-                const oldRoles = oldMember.roles.cache.map(r => r.id).sort().join(',');
-                const newRoles = newMember.roles.cache.map(r => r.id).sort().join(',');
-                if (oldRoles === newRoles) {
-                    return;
-                }
-
-                logger.info(`Discord roles updated for member ${newMember.user.tag}`);
-
-                const newTag = determineTag(newMember, DEFAULT_TAG);
-
-                const result = await Member.findOneAndUpdate(
-                    { id: newMember.user.id },
-                    { $set: { tag: newTag } },
-                    { new: true }
-                );
-
-                if (result) {
-                    logger.info(`[Real-time Sync] Updated tag to '${newTag}' in DB for member ${newMember.user.tag}`);
-                }
-
-                // Se l'utente ha il ruolo OPERATORE o tag LSE, aggiorniamo il nickname su Discord
-                try {
-                    const currentNickname = newMember.nickname || newMember.displayName || newMember.user?.username || '';
-                    const cleanName = cleanMemberName(currentNickname);
-                    if (cleanName) {
-                        const tagUpper = String(newTag).toUpperCase();
-                        const tagPrefix = (tagUpper === 'LSE' || tagUpper === 'OPERATORE') ? 'LSE' : tagUpper;
-                        const newNickname = `[${tagPrefix}] ${cleanName}`;
-                        if (newMember.nickname !== newNickname) {
-                            await newMember.setNickname(newNickname);
-                            logger.info(`Updated nickname for Discord user ${newMember.user.id} to: "${newNickname}" via guildMemberUpdate`);
-                        }
-                    }
-                } catch (nickError) {
-                    logger.warn(`Failed to update nickname for Discord user ${newMember.user.id} via guildMemberUpdate: ${nickError.message}`);
-                }
-            } catch (error) {
-                logger.error(`Error handling guildMemberUpdate for ${newMember.user.id}:`, error);
-            }
-        });
-
         try {
             await this.client.login(token);
             // Wait for ready event
@@ -171,8 +128,12 @@ class DiscordBot {
             logger.info(`Fetched ${members.size} members from Discord`);
 
             // Get existing members from DB
-            const existingMembers = await Member.find({}, 'id name tag');
-            const existingById = new Map(existingMembers.map(m => [m.id, m]));
+            const existingMembers = await Member.find({}, 'id name tag').lean();
+            const promotedMembers = await PromotedMember.find({}, 'id name tag').lean();
+            
+            const existingById = new Map();
+            existingMembers.forEach(m => existingById.set(m.id, { ...m, isPromoted: false }));
+            promotedMembers.forEach(m => existingById.set(m.id, { ...m, isPromoted: true }));
 
             let added = 0;
             let updated = 0;
@@ -180,20 +141,30 @@ class DiscordBot {
 
             // Find max key
             const maxKeyDoc = await Member.findOne().sort({ key: -1 });
-            let maxKey = maxKeyDoc ? maxKeyDoc.key : 0;
+            const maxKeyPromotedDoc = await PromotedMember.findOne().sort({ key: -1 });
+            let maxKey = Math.max(
+                maxKeyDoc ? maxKeyDoc.key : 0,
+                maxKeyPromotedDoc ? maxKeyPromotedDoc.key : 0
+            );
 
             for (const [memberId, member] of members) {
                 // Skip bots
                 if (member.user.bot) continue;
 
-                const currentTag = determineTag(member, DEFAULT_TAG);
+                const currentTag = determineTag(member, null);
                 const existing = existingById.get(memberId);
 
                 if (existing) {
+                    const finalTag = currentTag || existing.tag; // Mantiene il tag attuale se non ha ruoli specifici in Discord
                     const cleanName = pickName(member, NAME_SOURCE);
                     const nameChanged = existing.name !== cleanName;
-                    if (existing.tag !== currentTag || nameChanged) {
-                        await Member.updateOne({ id: memberId }, { $set: { tag: currentTag, name: cleanName } });
+                    
+                    if (existing.tag !== finalTag || nameChanged) {
+                        if (existing.isPromoted) {
+                            await PromotedMember.updateOne({ id: memberId }, { $set: { tag: finalTag, name: cleanName } });
+                        } else {
+                            await Member.updateOne({ id: memberId }, { $set: { tag: finalTag, name: cleanName } });
+                        }
                         updated++;
                     } else {
                         skipped++;
@@ -204,7 +175,7 @@ class DiscordBot {
                         const currentNickname = member.nickname || member.displayName || member.user?.username || '';
                         const cleanNameNick = cleanMemberName(currentNickname);
                         if (cleanNameNick) {
-                            const tagUpper = String(currentTag).toUpperCase();
+                            const tagUpper = String(finalTag).toUpperCase();
                             const tagPrefix = (tagUpper === 'LSE' || tagUpper === 'OPERATORE') ? 'LSE' : tagUpper;
                             const newNickname = `[${tagPrefix}] ${cleanNameNick}`;
                             if (member.nickname !== newNickname) {
@@ -216,6 +187,12 @@ class DiscordBot {
                         logger.warn(`Failed to update nickname for Discord user ${memberId} via syncMembers: ${nickError.message}`);
                     }
 
+                    continue;
+                }
+
+                // Skip if they are new and don't have any specific LSE/LSE-P roles
+                if (!currentTag) {
+                    skipped++;
                     continue;
                 }
 
@@ -345,9 +322,11 @@ class DiscordBot {
         }
 
         logger.info('Starting to apply database changes (roles & nicknames) to Discord...');
-        
+
         try {
-            const members = await Member.find({ id: { $ne: '', $exists: true } });
+            const regularMembers = await Member.find({ id: { $ne: '', $exists: true } });
+            const promotedMembers = await PromotedMember.find({ id: { $ne: '', $exists: true } });
+            const members = [...regularMembers, ...promotedMembers];
             logger.info(`Found ${members.length} members with Discord ID in DB`);
 
             let successCount = 0;

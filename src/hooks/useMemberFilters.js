@@ -53,8 +53,8 @@ export function useMemberFilters(members) {
             const matchIdoneita = selectedIdoneita === 'Tutti'
                 ? true
                 : selectedIdoneita === 'Idonei'
-                    ? m.idoneita === true && m.tag !== 'LSE'
-                    : m.idoneita === false && m.tag !== 'LSE';
+                    ? m.idoneita === true
+                    : m.idoneita === false;
             const matchValidation = selectedValidation === 'Tutti'
                 ? true
                 : selectedValidation === 'Validazione fallita'
