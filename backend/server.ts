@@ -54,6 +54,11 @@ const mongooseOptions = {
 
 const app = express();
 
+// Trust proxy is required when deployed behind a reverse proxy (e.g., Nginx, Heroku, Cloudflare)
+// to allow express-rate-limit to correctly identify client IP addresses.
+app.set('trust proxy', 1);
+
+
 // =========================================================================
 // MIDDLEWARE CONFIGURATION
 // =========================================================================
