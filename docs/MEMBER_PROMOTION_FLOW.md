@@ -13,7 +13,7 @@ graph TD
     StartDiscord["Modifica Ruoli su Discord o Sync Manuale/Automatico"] --> SyncBot
 
     %% Web Flow
-    subgraph Frontend (React)
+    subgraph "Frontend (React)"
         CheckPromotedUI{"Membro è già promosso?<br>promoted === true o<br>tag === LSE o OPERATORE"}
         
         %% Caso: Non Promosso -> Promozione
@@ -22,7 +22,7 @@ graph TD
         CheckIdoneo -- Sì --> ConfirmPromote["Mostra window.confirm di Promozione"]
         ConfirmPromote -- Annulla --> End["Fine"]
         ConfirmPromote -- Conferma --> CallApiPromote["Invia PUT /api/v1/members/:key<br>tag: 'LSE', promoted: true, idoneita: true"]
-
+        
         %% Caso: Promosso -> Rimozione
         CheckPromotedUI -- Sì (Rimozione) --> ConfirmDemote["Mostra window.confirm di Rimozione"]
         ConfirmDemote -- Annulla --> End
@@ -30,7 +30,7 @@ graph TD
     end
 
     %% Backend Flow
-    subgraph Backend (Express & Discord Bot)
+    subgraph "Backend (Express & Discord Bot)"
         CallApiPromote --> UpdateDB["Aggiorna il database MongoDB"]
         CallApiDemote --> UpdateDB
         
@@ -52,7 +52,7 @@ graph TD
     end
 
     %% Discord Triggered Flow
-    subgraph Sincronizzazione da Discord (Eventi/Sync)
+    subgraph "Sincronizzazione da Discord (Eventi/Sync)"
         SyncBot["Rilevato evento guildMemberUpdate<br>o caricamento tramite syncMembers"] --> DetTag["determineTag: esamina ruoli correnti su Discord"]
         DetTag --> CheckRoles{"Ha ruolo OPERATORE o LSE?"}
         CheckRoles -- Sì --> SetTagLSE["Tag impostato su LSE"]
