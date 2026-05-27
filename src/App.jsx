@@ -113,6 +113,16 @@ function AppContent() {
     );
 }
 
+// Banner per l'ambiente di sviluppo
+function DevBanner() {
+    if (!import.meta.env.DEV) return null;
+    return (
+        <div className="bg-red-600 text-white text-center py-1 font-bold tracking-widest text-sm relative z-[9999] shadow-md border-b border-red-800">
+            ⚠️ DEV VERSION - AMBIENTE DI SVILUPPO (LOCALE) ⚠️
+        </div>
+    );
+}
+
 // Componente principale con Providers
 export default function LseMembersInterface() {
     return (
@@ -120,6 +130,7 @@ export default function LseMembersInterface() {
             <AuthProvider>
                 <MembersProvider>
                     <EventsProvider>
+                        <DevBanner />
                         <AppContent />
                     </EventsProvider>
                 </MembersProvider>
