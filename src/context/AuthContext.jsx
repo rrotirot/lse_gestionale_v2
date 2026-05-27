@@ -5,9 +5,36 @@ import { getApiBaseUrl, getStoredRememberMe } from '../lib/runtime-config';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const [authToken, setAuthToken] = useState(null);
-    const [user, setUser] = useState(null);
+    const [authToken, setAuthToken] = useState(() => {
+        if (typeof window === 'undefined') return null;
+        const rememberMe = window.localStorage.getItem('rememberMe');
+        return rememberMe === 'true'
+            ? window.localStorage.getItem('authToken')
+            : window.sessionStorage.getItem('authToken');
+    });
+
+    const [user, setUser] = useState(() => {
+        if (typeof window === 'undefined') return null;
+        const rememberMe = window.localStorage.getItem('rememberMe');
+        const savedUser = rememberMe === 'true'
+            ? window.localStorage.getItem('user')
+            : window.sessionStorage.getItem('user');
+        try {
+            return savedUser ? JSON.parse(savedUser) : null;
+        } catch {
+            return null;
+        }
+    });
+
+    const [isAuthenticated, setIsAuthenticated] = useState(() => {
+        if (typeof window === 'undefined') return false;
+        const rememberMe = window.localStorage.getItem('rememberMe');
+        const token = rememberMe === 'true'
+            ? window.localStorage.getItem('authToken')
+            : window.sessionStorage.getItem('authToken');
+        return !!token;
+    });
+
     const [loading, setLoading] = useState(true);
     
     // URL del backend RSI proxy
@@ -71,39 +98,67 @@ export function AuthProvider({ children }) {
             })
                 .then(res => res.json())
                  .then(data => {
-                     if (data.success) {
-                         setAuthToken(token);
-                         setUser(data.user);
-                         setIsAuthenticated(true);
-                     } else {
-                         // Token non valido, rimuovi credenziali
-                         console.error('Token verification failed on app startup:', {
-                             error: data.error,
-                             storageType,
-                             tokenLength: token.length,
-                             timestamp: new Date().toISOString()
-                         });
-                         localStorage.removeItem('authToken');
-                         localStorage.removeItem('user');
-                         localStorage.removeItem('rememberMe');
-                         sessionStorage.removeItem('authToken');
-                         sessionStorage.removeItem('user');
-                     }
-                 })
+                      if (data.success) {
+                          setAuthToken(token);
+                          setUser(data.user);
+                          setIsAuthenticated(true);
+                      } else {
+                          // Token non valido, rimuovi credenziali a meno che non sia admin rank >= 4
+                          console.error('Token verification failed on app startup:', {
+                              error: data.error,
+                              storageType,
+                              tokenLength: token.length,
+                              timestamp: new Date().toISOString()
+                          });
+                          
+                          let parsedUser = null;
+                          try { parsedUser = JSON.parse(savedUser); } catch(e) {}
+                          
+                          if (parsedUser && parsedUser.organizationRank >= 4) {
+                              console.log('⚠️ Token non valido ma utente ha rank >= 4. Mantengo la sessione.');
+                              setAuthToken(token);
+                              setUser(parsedUser);
+                              setIsAuthenticated(true);
+                          } else {
+                              localStorage.removeItem('authToken');
+                              localStorage.removeItem('user');
+                              localStorage.removeItem('rememberMe');
+                              sessionStorage.removeItem('authToken');
+                              sessionStorage.removeItem('user');
+                              setAuthToken(null);
+                              setUser(null);
+                              setIsAuthenticated(false);
+                          }
+                      }
+                  })
                  .catch((error) => {
-                     console.error('Token verification request failed:', {
-                         message: error.message,
-                         storageType,
-                         tokenLength: token.length,
-                         apiUrl: rsiApiUrl,
-                         timestamp: new Date().toISOString()
-                     });
-                     localStorage.removeItem('authToken');
-                     localStorage.removeItem('user');
-                     localStorage.removeItem('rememberMe');
-                     sessionStorage.removeItem('authToken');
-                     sessionStorage.removeItem('user');
-                 })
+                      console.error('Token verification request failed:', {
+                          message: error.message,
+                          storageType,
+                          tokenLength: token.length,
+                          apiUrl: rsiApiUrl,
+                          timestamp: new Date().toISOString()
+                      });
+                      
+                      let parsedUser = null;
+                      try { parsedUser = JSON.parse(savedUser); } catch(e) {}
+                      
+                      if (parsedUser && parsedUser.organizationRank >= 4) {
+                          console.log('⚠️ Errore connessione ma utente ha rank >= 4. Mantengo la sessione.');
+                          setAuthToken(token);
+                          setUser(parsedUser);
+                          setIsAuthenticated(true);
+                      } else {
+                          localStorage.removeItem('authToken');
+                          localStorage.removeItem('user');
+                          localStorage.removeItem('rememberMe');
+                          sessionStorage.removeItem('authToken');
+                          sessionStorage.removeItem('user');
+                          setAuthToken(null);
+                          setUser(null);
+                          setIsAuthenticated(false);
+                      }
+                  })
                 .finally(() => {
                     setLoading(false);
                 });
