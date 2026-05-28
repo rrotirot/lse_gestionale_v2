@@ -158,12 +158,17 @@ class DiscordBot {
                     const finalTag = currentTag || existing.tag; // Mantiene il tag attuale se non ha ruoli specifici in Discord
                     const cleanName = pickName(member, NAME_SOURCE);
                     const nameChanged = existing.name !== cleanName;
+                    const discordAvatarUrl = member.user.avatar ? `https://cdn.discordapp.com/avatars/${memberId}/${member.user.avatar}.png?size=128` : null;
                     
-                    if (existing.tag !== finalTag || nameChanged) {
+                    if (existing.tag !== finalTag || nameChanged || (discordAvatarUrl && existing.discordAvatar !== discordAvatarUrl)) {
+                        const updateData = { tag: finalTag, name: cleanName };
+                        if (discordAvatarUrl) {
+                            updateData.discordAvatar = discordAvatarUrl;
+                        }
                         if (existing.isPromoted) {
-                            await PromotedMember.updateOne({ id: memberId }, { $set: { tag: finalTag, name: cleanName } });
+                            await PromotedMember.updateOne({ id: memberId }, { $set: updateData });
                         } else {
-                            await Member.updateOne({ id: memberId }, { $set: { tag: finalTag, name: cleanName } });
+                            await Member.updateOne({ id: memberId }, { $set: updateData });
                         }
                         updated++;
                     } else {
@@ -209,7 +214,8 @@ class DiscordBot {
                     promoted: false,
                     note: '',
                     affiliazioniOrg: '',
-                    orgValidation: null
+                    orgValidation: null,
+                    discordAvatar: member.user.avatar ? `https://cdn.discordapp.com/avatars/${memberId}/${member.user.avatar}.png?size=128` : null
                 };
 
                 await Member.create(memberData);

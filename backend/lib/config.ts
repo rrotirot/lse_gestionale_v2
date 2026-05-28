@@ -82,23 +82,33 @@ const setupMongoDB = (): typeof mongoose => {
         }
     };
 
+    // Exponential backoff per retry MongoDB
+    let reconnectRetryCount = 0;
+    const MAX_RETRY_DELAY = 30000; // 30 secondi max
+    const BASE_DELAY = 5000; // 5 secondi inizio
+
     // Gestione eventi connessione
     mongoose.connection.on('disconnected', () => {
         logger.warn('MongoDB disconnected');
     });
 
     mongoose.connection.on('reconnected', () => {
-        logger.info('MongoDB reconnected');
+        reconnectRetryCount = 0;
+        logger.info('MongoDB reconnected successfully');
     });
 
     mongoose.connection.on('error', (error: Error) => {
         logger.error('MongoDB error', { error: error.message });
     });
 
-    // Retry automatico ogni 5 secondi se disconnesso
+    // Retry automatico con exponential backoff se disconnesso
     mongoose.connection.on('disconnected', () => {
-        logger.info('Attempting MongoDB reconnection...');
-        setTimeout(connectWithRetry, 5000);
+        const delay = Math.min(MAX_RETRY_DELAY, BASE_DELAY * Math.pow(1.5, reconnectRetryCount));
+        logger.warn(`MongoDB disconnected. Retry attempt #${reconnectRetryCount + 1} in ${delay}ms`, {
+            nextRetryIn: `${(delay/1000).toFixed(1)}s`
+        });
+        setTimeout(connectWithRetry, delay);
+        reconnectRetryCount++;
     });
 
     // Connessione iniziale

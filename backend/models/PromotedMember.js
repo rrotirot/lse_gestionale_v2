@@ -78,6 +78,10 @@ const promotedMemberSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    discordAvatar: {
+        type: String,
+        default: null
+    },
 
     // Mantiene i timestamp originali
     createdAt: {

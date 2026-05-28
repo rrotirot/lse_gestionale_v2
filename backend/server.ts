@@ -93,6 +93,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(requestLogger);
 
 // Rate Limiting - Disabled in development mode
+let validateLimiter: any = null;
 if (!RATE_LIMIT_DISABLED) {
     const generalLimiter = rateLimit({
         windowMs: 15 * 60 * 1000, // 15 minutes
@@ -100,6 +101,20 @@ if (!RATE_LIMIT_DISABLED) {
         message: 'Troppi richeste da questo IP, riprova tra 15 minuti.',
     });
     app.use('/api', generalLimiter);
+
+    // Rate limiter specifico per validazione membri: max 5 validazioni per IP per minuto
+    validateLimiter = rateLimit({
+        windowMs: 60 * 1000, // 1 minuto
+        max: 5, // max 5 validazioni per IP per minuto
+        keyGenerator: (req: any) => {
+            const memberId = req.params.key || 'unknown';
+            return `${req.ip}:${memberId}`;
+        },
+        message: 'Troppi tentativi di validazione per questo membro, riprova tra 1 minuto.',
+        standardHeaders: true,
+        legacyHeaders: false,
+        skip: (req: any) => !req.params.key
+    });
 } else {
     console.warn('⚠️  Rate limiting is DISABLED - development mode');
 }
@@ -451,31 +466,48 @@ app.get('/api/v1/rsi/orgs/:handle', async (req, res) => {
         };
 
         // Risolvi SID dalla pagina dell'org cercando la label "Spectrum Identification (SID)"
-        // (best-effort; poche org per utente)
-        for (const o of orgs) {
-            if (o.sid) continue;
-            const urlToFetch = String(o.url || o.spectrumUrl || '').trim();
-            if (!urlToFetch) continue;
+        // Parallelizzazione fetch org con timeout e concurrency limit
+        const orgFetchPromises = orgs
+            .filter(o => !o.sid)
+            .map(async (o) => {
+                const urlToFetch = String(o.url || o.spectrumUrl || '').trim();
+                if (!urlToFetch) return;
 
-            try {
-                const r = await fetch(urlToFetch, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+
+                    const r = await fetch(urlToFetch, {
+                        method: 'GET',
+                        signal: controller.signal,
+                        headers: {
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                        }
+                    });
+                    clearTimeout(timeoutId);
+
+                    if (!r.ok) return;
+                    
+                    const orgHtml = await r.text();
+                    const sidResolved = resolveSidFromOrgPageHtml(orgHtml);
+                    if (sidResolved) {
+                        o.sid = sidResolved;
+                        // Normalizza sempre l'URL pubblico via SID
+                        o.url = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(sidResolved)}`;
                     }
-                });
-                if (!r.ok) continue;
-                const orgHtml = await r.text();
-                const sidResolved = resolveSidFromOrgPageHtml(orgHtml);
-                if (sidResolved) {
-                    o.sid = sidResolved;
-                    // Normalizza sempre l'URL pubblico via SID
-                    o.url = `https://robertsspaceindustries.com/en/orgs/${encodeURIComponent(sidResolved)}`;
+                } catch (error) {
+                    if (error.name !== 'AbortError') {
+                        logger.debug(`Org SID resolution timeout for ${o.url || 'unknown'}`);
+                    }
                 }
-            } catch {
-                // best-effort
-            }
+            });
+
+        // Limita concurrency: max 3 fetch org paralleli
+        const maxConcurrency = 3;
+        for (let i = 0; i < orgFetchPromises.length; i += maxConcurrency) {
+            const batch = orgFetchPromises.slice(i, i + maxConcurrency);
+            await Promise.allSettled(batch);
         }
 
         // Conteggio org basato sui NOMI (non tag/handle), includendo sempre la main org.
@@ -2237,7 +2269,7 @@ app.put('/api/v1/members/:key/reset-validation', checkMongoConnection, authentic
 });
 
 // Endpoint per validare un membro (controlla affiliazioni org RSI)
-app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToken, async (req, res) => {
+app.post('/api/v1/members/:key/validate', validateLimiter ? validateLimiter : (req: any, res: any, next: any) => next(), checkMongoConnection, authenticateToken, async (req, res) => {
     try {
         const { key } = req.params;
 
@@ -2269,13 +2301,32 @@ app.post('/api/v1/members/:key/validate', checkMongoConnection, authenticateToke
 
         console.log(`🔍 Validazione membro key=${key} (${member.name}) con handle RSI estratto: ${rsiHandle}`);
 
-        // Chiama l'endpoint per ottenere le affiliazioni org
-        const orgsResponse = await fetch(`${req.protocol}://${req.get('host')}/api/v1/rsi/orgs/${encodeURIComponent(rsiHandle)}`, {
-            method: 'GET',
-            headers: {
-                'Accept': 'application/json'
+        // Chiama l'endpoint per ottenere le affiliazioni org con timeout 15s
+        const validateController = new AbortController();
+        const validateTimeout = setTimeout(() => validateController.abort(), 15000);
+
+        let orgsResponse;
+        try {
+            orgsResponse = await fetch(`${req.protocol}://${req.get('host')}/api/v1/rsi/orgs/${encodeURIComponent(rsiHandle)}`, {
+                method: 'GET',
+                signal: validateController.signal,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+        } catch (error) {
+            clearTimeout(validateTimeout);
+            if (error.name === 'AbortError') {
+                logger.error(`Validation timeout for member key=${key} after 15s`);
+                return res.status(504).json({
+                    success: false,
+                    error: 'Validazione troppo lenta, riprova più tardi'
+                });
             }
-        });
+            throw error;
+        } finally {
+            clearTimeout(validateTimeout);
+        }
         // Anche se la rotta proxy risponde con status != 200 (es. 404),
         // vogliamo comunque salvare la validazione sul membro per mostrare badge/issue in UI.
         let orgsData = null;
@@ -2572,6 +2623,11 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
         delete updateData.createdAt;
         updateData.updatedAt = new Date();
 
+        // Preserva l'avatar Discord se non viene specificato un nuovo valore
+        if (!updateData.discordAvatar && currentMember.discordAvatar) {
+            updateData.discordAvatar = currentMember.discordAvatar;
+        }
+
         // Migrazione: converti daTenereDOcchio a watchdog se presente
         if (updateData.daTenereDOcchio !== undefined && updateData.watchdog === undefined) {
             updateData.watchdog = updateData.daTenereDOcchio;
@@ -2644,6 +2700,10 @@ app.put('/api/v1/members/:key', checkMongoConnection, async (req, res) => {
             delete memberData.promotedAt;
             delete memberData.promotedBy;
             delete memberData.originalMemberId;
+            // Preserva l'avatar Discord durante la demozione
+            if (currentMember.discordAvatar) {
+                memberData.discordAvatar = currentMember.discordAvatar;
+            }
 
             const restoredMember = await Member.create(memberData);
             await PromotedMember.findByIdAndDelete(currentMember._id);
